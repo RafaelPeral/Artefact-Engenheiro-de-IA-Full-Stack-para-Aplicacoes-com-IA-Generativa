@@ -1,1 +1,1 @@
-# Artefact---Engenheiro-a-de-IA-Full-Stack-para-Aplica-es-com-IA-Generativa
+# Artefact-Engenheiro-de-IA-Full-Stack-para-Aplicacoes-com-IA-Generativa
