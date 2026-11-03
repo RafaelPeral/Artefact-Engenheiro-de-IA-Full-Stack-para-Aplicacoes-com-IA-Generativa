@@ -1,0 +1,1 @@
+# Artefact---Engenheiro-a-de-IA-Full-Stack-para-Aplica-es-com-IA-Generativa
