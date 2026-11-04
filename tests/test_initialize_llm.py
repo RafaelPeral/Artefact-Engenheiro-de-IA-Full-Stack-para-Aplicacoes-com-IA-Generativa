@@ -91,6 +91,22 @@ def test_startup_errors_cleanup_without_downloading(runtime, error, expected):
     runtime.lifecycle.stop.assert_called_once()
 
 
+def test_structured_output_schema_reaches_ollama(runtime):
+    schema = {
+        "type": "object",
+        "properties": {"question_type": {"type": "string", "enum": ["out_of_scope"]}},
+        "required": ["question_type"],
+    }
+    runtime.client.chat.return_value.message.content = '{"question_type":"out_of_scope"}'
+    with llm.initialize_llm() as respond:
+        result = respond(
+            "Qual é a capital dos Estados Unidos?", "Classifique a pergunta.",
+            response_format=schema,
+        )
+    assert result == '{"question_type":"out_of_scope"}'
+    assert runtime.client.chat.call_args.kwargs["format"] == schema
+
+
 def test_application_error_still_releases_resources(runtime):
     with pytest.raises(ValueError, match="application failed"):
         with llm.initialize_llm():

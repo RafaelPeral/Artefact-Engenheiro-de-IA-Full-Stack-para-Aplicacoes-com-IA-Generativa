@@ -103,6 +103,8 @@ def initialize_llm(
                     "Do not invent product data, order details, or policies. "
                     "If verified data is unavailable, state that clearly."
                 ),
+                *,
+                response_format: dict | None = None,
             ) -> str:
                 """Generate a response using the model selected at startup."""
                 if not isinstance(message, str) or not message.strip():
@@ -117,6 +119,7 @@ def initialize_llm(
                         stream=False,
                         keep_alive="10m" if owns_server else 0,
                         options=options,
+                        **({"format": response_format} if response_format is not None else {}),
                     )
                     log_inference_metrics(response)
                     content = response.message.content

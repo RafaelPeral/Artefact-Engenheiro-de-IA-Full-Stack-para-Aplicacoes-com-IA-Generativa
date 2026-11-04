@@ -1,12 +1,14 @@
 """Test the FastAPI interface without contacting a real language model."""
 
 import importlib
+import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, ReadTimeout
+from app.question_routing import CLASSIFICATION_SCHEMA, ANSWERS, CLASSIFICATION_PROMPT, QuestionType
 
 
 api = importlib.import_module("app.app")
@@ -16,7 +18,7 @@ api = importlib.import_module("app.app")
 def runtime(monkeypatch):
     initialize = MagicMock()
     generate = initialize.return_value.__enter__.return_value
-    generate.return_value = "Washington, D.C."
+    generate.return_value = json.dumps({"question_type": "database"})
     monkeypatch.setattr(api, "configure_logging", lambda: None)
     monkeypatch.setattr(api, "initialize_llm", initialize)
     return SimpleNamespace(initialize=initialize, generate=generate)
@@ -38,14 +40,20 @@ async def test_two_questions_reuse_one_llm(runtime):
         ) as connection:
             for _ in range(2):
                 response = await connection.post(
-                    "/questions", params={"question": " What is the capital? "}
+                    "/questions", params={"question": " Quais produtos vocês vendem? "}
                 )
                 assert response.status_code == 200
-                assert response.json() == {"answer": "Washington, D.C."}
+                assert response.json() == {
+                    "answer": ANSWERS[QuestionType.DATABASE],
+                    "question_type": "database", "requires_lookup": True,
+                }
             runtime.initialize.assert_called_once()
             runtime.initialize.return_value.__exit__.assert_not_called()
     assert runtime.generate.call_count == 2
-    runtime.generate.assert_called_with("What is the capital?")
+    runtime.generate.assert_called_with(
+        "Quais produtos vocês vendem?", CLASSIFICATION_PROMPT,
+        response_format=CLASSIFICATION_SCHEMA,
+    )
     runtime.initialize.return_value.__exit__.assert_called_once()
     assert not hasattr(api.app.state, "generate_response")
 
@@ -92,4 +100,40 @@ async def test_initialization_failure_prevents_serving(runtime):
         async with api.app.router.lifespan_context(api.app):
             pass
     runtime.generate.assert_not_called()
+
+
+@pytest.mark.parametrize("label, lookup", [
+    ("database", True), ("pdf", True), ("database_and_pdf", True),
+    ("greeting", False), ("out_of_scope", False),
+])
+async def test_routes_return_only_fixed_answers(client, runtime, label, lookup):
+    runtime.generate.return_value = json.dumps({"question_type": label})
+    response = await client.post("/questions", params={"question": "Mensagem"})
+    assert response.status_code == 200
+    assert response.json() == {
+        "answer": ANSWERS[QuestionType(label)],
+        "question_type": label, "requires_lookup": lookup,
+    }
+    runtime.generate.assert_called_once_with(
+        "Mensagem", CLASSIFICATION_PROMPT, response_format=CLASSIFICATION_SCHEMA
+    )
+
+
+async def test_invalid_classification_never_becomes_an_answer(client, runtime):
+    runtime.generate.return_value = "Invented product information"
+    response = await client.post("/questions", params={"question": "Produtos?"})
+    assert response.status_code == 502
+    assert "Invented" not in response.text
+
+
+async def test_capital_question_returns_standard_refusal(client, runtime):
+    runtime.generate.return_value = '{"question_type":"out_of_scope"}'
+    response = await client.post(
+        "/questions", params={"question": "Qual é a capital dos Estados Unidos?"}
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "answer": ANSWERS[QuestionType.OUT_OF_SCOPE],
+        "question_type": "out_of_scope", "requires_lookup": False,
+    }
 

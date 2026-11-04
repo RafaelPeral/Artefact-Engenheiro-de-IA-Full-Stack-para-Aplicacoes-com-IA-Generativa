@@ -10,13 +10,16 @@ from ollama import ResponseError
 from pydantic import BaseModel
 
 from .initialize_llm import initialize_llm
+from .question_routing import ANSWERS, QuestionType, classify_question
 from .tracing import LOGGER, configure_logging, trace_step
 
 
 class QuestionResponse(BaseModel):
-    """Return the generated answer as JSON."""
+    """Return the route and a fixed response until retrieval is implemented."""
 
     answer: str
+    question_type: QuestionType
+    requires_lookup: bool
 
 
 @asynccontextmanager
@@ -54,13 +57,15 @@ def ask_question(
         ),
     ],
 ) -> QuestionResponse:
-    """Generate one answer using the LLM initialized during startup."""
+    """Classify the question and respond without executing data lookups."""
     with trace_step("api.question"):
         try:
             # Serialize inference to fit the target machine's memory budget.
             # A sync endpoint keeps blocking inference off the event loop.
             with request.app.state.inference_lock:
-                answer = request.app.state.generate_response(question.strip())
+                question_type = classify_question(
+                    question, request.app.state.generate_response
+                )
         except TimeoutException as error:
             raise HTTPException(
                 504, "Local model request timed out"
@@ -72,4 +77,12 @@ def ask_question(
         except (ResponseError, RuntimeError) as error:
             LOGGER.exception("Local model could not answer the question")
             raise HTTPException(502, "Local model inference failed") from error
-        return QuestionResponse(answer=answer)
+        LOGGER.info("Question route | type=%s", question_type.value)
+        return QuestionResponse(
+            answer=ANSWERS[question_type],
+            question_type=question_type,
+            requires_lookup=question_type in {
+                QuestionType.DATABASE, QuestionType.PDF,
+                QuestionType.DATABASE_AND_PDF,
+            },
+        )
