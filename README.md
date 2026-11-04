@@ -1,5 +1,34 @@
 # Artefact AI Engineering Project
 
+## Technical decisions and assumptions
+
+The requirements do not specify question volume, concurrent demand, the
+frequency of repeated questions, or a response-time target. I therefore chose
+a general-purpose approach, assuming a low volume of questions and no need
+for near-zero response latency. These are design assumptions rather than
+measured workload characteristics, and should be revisited with actual usage.
+
+If a small set of questions accounts for a large share of requests, dedicated
+functionality would be more appropriate for those answers. Frequent questions
+such as "Quais os produtos vocês vendem?" or "Qual o horário de funcionamento?"
+could be answered deterministically from the product catalog or configured
+business information, without invoking an LLM for each response. This would
+reduce inference cost and latency while keeping answers tied to maintained
+data. The current implementation does not yet provide this routing.
+
+Cost and the available hardware were the main drivers of the model choice.
+The project uses a compact, quantized `llama3.2:3b` model running locally to
+balance language capabilities with modest computational requirements and
+avoid per-request charges from a hosted model API. Local execution still
+incurs hardware and electricity costs, and its answer quality and performance
+need to be evaluated against the intended workload.
+
+Under the low-volume assumption, inference latency was given lower priority
+than cost and resource use. This does not establish that latency is
+unimportant to users: higher demand, stricter response-time targets, or a
+high rate of repeated questions would justify revisiting the architecture,
+including deterministic handlers, caching, and the inference infrastructure.
+
 ## Project initialization
 
 Run all commands from the repository root, which contains `requirements.txt`,
