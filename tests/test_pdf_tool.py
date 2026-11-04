@@ -17,6 +17,7 @@ def isolated_index(monkeypatch):
     pdf_tool._read_chunks.cache_clear()
     monkeypatch.delenv("PDF_EMBEDDING_MODEL", raising=False)
     monkeypatch.delenv("PDF_MIN_SIMILARITY", raising=False)
+    monkeypatch.delenv("PDF_EMBED_KEEP_ALIVE", raising=False)
     yield
     pdf_tool._semantic_index.cache_clear()
     pdf_tool._read_chunks.cache_clear()
@@ -135,7 +136,7 @@ def test_scanned_pdf_requires_ocr(tmp_path, monkeypatch):
         pdf_tool.consult_pdf("Horário", path)
 
 
-def test_embedding_request_releases_model_and_closes_client(monkeypatch):
+def test_embedding_request_remains_loaded_and_client_is_closed(monkeypatch):
     client = Mock()
     client.embed.return_value = SimpleNamespace(embeddings=[[3., 4.]])
     factory = Mock()
@@ -144,7 +145,8 @@ def test_embedding_request_releases_model_and_closes_client(monkeypatch):
     monkeypatch.setattr(pdf_tool, "Client", factory)
     assert pdf_tool._embed(["query"], "embeddinggemma") == ((.6, .8),)
     client.embed.assert_called_once_with(
-        model="embeddinggemma", input=["query"], truncate=False, keep_alive=0)
+        model="embeddinggemma", input=["query"], truncate=False,
+        keep_alive=-1)
     factory.return_value.__exit__.assert_called_once()
 
 

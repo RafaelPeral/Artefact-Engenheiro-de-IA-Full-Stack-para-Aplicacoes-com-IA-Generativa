@@ -56,7 +56,7 @@ def initialize_llm(
         "LLM configuration | model=%s | context=%s | timeout=%.1fs",
         model, context_size, timeout,
     )
-    with ollama_server(startup_timeout) as owns_server:
+    with ollama_server(startup_timeout):
         client = Client(
             host="http://127.0.0.1:11434", timeout=timeout, trust_env=False
         )
@@ -76,7 +76,7 @@ def initialize_llm(
                         model=model,
                         prompt="",
                         stream=False,
-                        keep_alive="10m" if owns_server else 0,
+                        keep_alive=-1,
                         options=options,
                     )
             except ConnectionError as error:
@@ -105,7 +105,8 @@ def initialize_llm(
                     raise ValueError("message must be a non-empty string")
                 if system_prompt is None:
                     system_prompt = load_prompt("assistant.md")
-                with trace_step("llm.generate"):
+                operation = "llm.classify" if response_format is not None else "llm.generate"
+                with trace_step(operation):
                     response = client.chat(
                         model=model,
                         messages=[
@@ -113,11 +114,11 @@ def initialize_llm(
                             {"role": "user", "content": message.strip()},
                         ],
                         stream=False,
-                        keep_alive="10m" if owns_server else 0,
+                        keep_alive=-1,
                         options=options,
                         **({"format": response_format} if response_format is not None else {}),
                     )
-                    log_inference_metrics(response)
+                    log_inference_metrics(response, operation=operation)
                     content = response.message.content
                     LOGGER.info(
                         "LLM_OUTPUT | mode=%s | content=%s",
@@ -133,15 +134,11 @@ def initialize_llm(
             yield generate_response
         finally:
             try:
-                if owns_server:
-                    try:
-                        with trace_step("llm.unload"):
-                            client.generate(model=model, keep_alive=0)
-                    except Exception:
-                        LOGGER.warning(
-                            "Model unload failed; stopping owned server",
-                            exc_info=True,
-                        )
+                try:
+                    with trace_step("llm.unload"):
+                        client.generate(model=model, keep_alive=0)
+                except Exception:
+                    LOGGER.warning("Model unload failed during shutdown", exc_info=True)
             finally:
                 with trace_step("llm.client_close"):
                     client.close()

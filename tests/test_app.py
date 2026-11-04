@@ -46,7 +46,9 @@ def runtime(monkeypatch):
     generate.return_value = json.dumps({"question_type": "database"})
     monkeypatch.setattr(lifecycle, "configure_logging", lambda: None)
     monkeypatch.setattr(lifecycle, "initialize_llm", initialize)
-    return SimpleNamespace(initialize=initialize, generate=generate)
+    pdf = MagicMock()
+    monkeypatch.setattr(lifecycle, "pdf_resources", pdf)
+    return SimpleNamespace(initialize=initialize, generate=generate, pdf=pdf)
 
 
 @pytest_asyncio.fixture
@@ -74,11 +76,23 @@ async def test_two_questions_reuse_one_llm(runtime):
                 }
             runtime.initialize.assert_called_once()
             runtime.initialize.return_value.__exit__.assert_not_called()
+            runtime.pdf.return_value.__enter__.assert_called_once()
+            runtime.pdf.return_value.__exit__.assert_not_called()
     assert runtime.generate.call_count == 2
     runtime.generate.assert_called_with(
         "Quais produtos vocês vendem?", CLASSIFICATION_PROMPT,
         response_format=CLASSIFICATION_SCHEMA,
     )
+    runtime.initialize.return_value.__exit__.assert_called_once()
+    runtime.pdf.return_value.__exit__.assert_called_once()
+    assert not hasattr(api.app.state, "question_service")
+
+
+async def test_pdf_startup_failure_releases_llm_and_prevents_serving(runtime):
+    runtime.pdf.return_value.__enter__.side_effect = PdfLookupError("cannot build index")
+    with pytest.raises(PdfLookupError, match="cannot build index"):
+        async with api.app.router.lifespan_context(api.app):
+            pytest.fail("API must not serve without its prepared index")
     runtime.initialize.return_value.__exit__.assert_called_once()
     assert not hasattr(api.app.state, "question_service")
 

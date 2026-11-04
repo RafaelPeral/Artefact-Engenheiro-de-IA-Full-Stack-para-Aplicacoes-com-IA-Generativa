@@ -14,6 +14,7 @@ llm = importlib.import_module("app.infrastructure.llm.client")
 
 @pytest.fixture
 def runtime(monkeypatch):
+    monkeypatch.delenv("LLM_KEEP_ALIVE", raising=False)
     client = Mock()
     client.chat.return_value.message.content = " Hello "
     client_factory = Mock(return_value=client)
@@ -137,6 +138,16 @@ def test_external_server_does_not_receive_shutdown_requests(monkeypatch):
     monkeypatch.setattr(llm, "ollama_server", existing_server)
     with llm.initialize_llm():
         pass
-    client.generate.assert_called_once()
-    assert client.generate.call_args.kwargs["keep_alive"] == 0
+    assert client.generate.call_count == 2
+    assert client.generate.call_args_list[0].kwargs["keep_alive"] == -1
+    assert client.generate.call_args_list[1].kwargs["keep_alive"] == 0
     client.close.assert_called_once()
+
+
+def test_models_remain_loaded_until_application_shutdown(runtime):
+    with llm.initialize_llm() as respond:
+        assert runtime.client.generate.call_args.kwargs["keep_alive"] == -1
+        respond("Olá")
+        assert runtime.client.chat.call_args.kwargs["keep_alive"] == -1
+    # Shutdown always explicitly releases the generation model.
+    assert runtime.client.generate.call_args.kwargs["keep_alive"] == 0

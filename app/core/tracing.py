@@ -71,7 +71,7 @@ def trace_step(name, heartbeat_interval=5.0):
             worker.join()
 
 
-def log_inference_metrics(response):
+def log_inference_metrics(response, operation="llm.generate"):
     """Report Ollama durations in seconds and output token throughput."""
     metrics = {}
     for field in (
@@ -86,10 +86,13 @@ def log_inference_metrics(response):
     details = " | ".join(
         f"{key}={value:.3f}s" for key, value in metrics.items()
     )
+    input_tokens = getattr(response, "prompt_eval_count", None)
+    if isinstance(input_tokens, int):
+        details += f" | input_tokens={input_tokens}"
     if isinstance(tokens, int) and duration > 0:
         details += (
             f" | output_tokens={tokens}"
             f" | tokens_per_second={tokens / duration:.2f}"
         )
     if details:
-        LOGGER.info("METRICS llm.generate | %s", details)
+        LOGGER.info("METRICS %s | %s", operation, details)
