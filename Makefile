@@ -1,7 +1,7 @@
 SHELL := powershell.exe
 .SHELLFLAGS := -NoProfile -Command
 
-.PHONY: help install ollama pip model embeddings run test
+.PHONY: help install ollama pip model embeddings run test benchmark
 
 help:
 	@Write-Host "$$([char]27)[1;36mAvailable commands:$$([char]27)[0m"
@@ -11,6 +11,7 @@ help:
 	@Write-Host "$$([char]27)[1;36mmake model$$([char]27)[0m"
 	@Write-Host "$$([char]27)[1;36mmake embeddings$$([char]27)[0m"
 	@Write-Host "$$([char]27)[1;36mmake test$$([char]27)[0m"
+	@Write-Host "$$([char]27)[1;36mmake benchmark$$([char]27)[0m"
 
 ollama:
 	@& ./scripts/setup_ollama.ps1
@@ -36,4 +37,7 @@ run:
 
 test:
 	python -m pytest
+
+benchmark:
+	python -m scripts.benchmark --output reports/performance/latest.json
 	
