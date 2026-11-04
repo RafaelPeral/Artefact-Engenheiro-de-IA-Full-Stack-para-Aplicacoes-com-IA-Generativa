@@ -246,6 +246,22 @@ Normal startup never downloads weights. A missing model produces an error
 asking for preparation: use `make model` on Windows or the preparation Python
 command above on Linux. Loading local weights into RAM/VRAM still takes time.
 
+`make run` prepares the complete serving state before the API accepts requests:
+it loads `llama3.2:3b`, extracts and embeds the policy PDF with
+`embeddinggemma`, and retains both models plus the in-memory PDF index for the
+whole process. This moves the expensive first PDF lookup to startup so ordinary
+requests do not repeatedly load model weights or rebuild the index. The choice
+fits the target GTX 1650: the measured models use roughly 3 GB of its 4 GB of
+VRAM when both are resident. It intentionally trades startup time and VRAM for
+lower, steadier request latency. A machine that cannot hold both models should
+use a smaller embedding or generation model; the application does not fall
+back to repeatedly unloading models.
+
+On graceful shutdown, the application clears the PDF index and explicitly
+unloads both models. The Ollama server itself is stopped only if the project
+started it. Ctrl+C therefore releases the memory held for this API run without
+terminating a server that was already running.
+
 Press Ctrl+C in the application's terminal to interrupt it and trigger
 cleanup. Only servers started by the project are stopped. A pre-existing
 Ollama server stays running; quit or stop it beforehand if you want the
@@ -360,11 +376,11 @@ On Linux, use:
 python -c "from app.infrastructure.llm.preparation import prepare_model; prepare_model('embeddinggemma')"
 ```
 
-The first PDF question builds the index; later questions embed only the query.
-Weights are released after embedding calls to limit memory overlap with the
-generation model. Both services use the application's local Ollama server;
-retrieval never downloads weights implicitly. A missing embedding model is
-reported in the logs with instructions to run `make embeddings`.
+The index is built during application startup; later PDF questions embed only
+the query. Both models remain resident until graceful application shutdown.
+Both services use the application's local Ollama server; retrieval never
+downloads weights implicitly. A missing embedding model is reported at startup
+with instructions to run `make embeddings`.
 
 `PDF_EMBEDDING_MODEL` selects another compatible embedding model. Query and
 document prefixes follow EmbeddingGemma's retrieval format; changing to an
@@ -450,6 +466,28 @@ and request overhead. Stages can be nested: do not add application time to
 its child timings. `WAIT` means the operation has not returned; it does not
 indicate the model's internal percentage of completion. Compare repeated
 runs and separate initial model loading from generation when optimizing.
+
+### Local performance benchmark
+
+Run `make benchmark` to exercise startup, SQLite import, PDF extraction,
+semantic indexing, classification, PDF retrieval, final generation, and
+shutdown through the same ASGI application used by the API. It writes a JSON
+report to `reports/performance/latest.json`; generated reports are ignored by
+Git. The benchmark sends sequential local requests, so it measures application
+latency rather than throughput, concurrency, network transit, or p95 latency.
+
+The report records wall-clock time for each stage and the duration fields
+returned by Ollama, including model load time, prompt evaluation time, output
+generation time, and token counts. Nested stages are inclusive and should not
+be added together. It also captures `ollama ps` and GPU snapshots before and
+after the run to make model residency visible.
+
+During the initial investigation, retaining models for the API process reduced
+repeated greeting/classification requests from roughly 6 seconds to less than
+0.3 seconds on the target machine. Repeated PDF requests fell from roughly
+20 seconds to roughly 3 seconds after the index and models were warm. These
+are local, small-sample observations rather than service-level guarantees; use
+the benchmark after changes to compare the same machine and model versions.
 
 To retain logs across runs, set `TRACE_LOG_FILE`:
 

@@ -1,6 +1,7 @@
 """Retrieve bounded, page-labelled excerpts from the store policy PDF."""
 
 from functools import lru_cache
+from contextlib import contextmanager
 import json
 import math
 import os
@@ -9,7 +10,7 @@ from pathlib import Path
 from ollama import Client, ResponseError
 from pypdf import PdfReader
 
-from app.core.tracing import LOGGER, trace_step
+from app.core.tracing import LOGGER, log_inference_metrics, trace_step
 
 
 DEFAULT_PDF = Path(__file__).resolve().parents[2] / "data" / "políticas_da_loja.pdf"
@@ -33,8 +34,11 @@ def _embed(texts, model):
     with trace_step("pdf.embed"):
         try:
             with Client(host="http://127.0.0.1:11434", timeout=120, trust_env=False) as client:
-                # Release embedding weights before the generation model runs.
-                response = client.embed(model=model, input=texts, truncate=False, keep_alive=0)
+                response = client.embed(
+                    model=model, input=texts, truncate=False,
+                    keep_alive=-1,
+                )
+            log_inference_metrics(response, operation="pdf.embed")
             if len(response.embeddings) != len(texts):
                 raise PdfLookupError("Embedding count does not match input count")
             return tuple(_unit_vector(vector) for vector in response.embeddings)
@@ -76,6 +80,27 @@ def _semantic_index(path, modified, size, model):
         if len({len(vector) for vector in vectors}) != 1:
             raise PdfLookupError("Inconsistent embedding dimensions")
         return chunks, vectors
+
+
+@contextmanager
+def pdf_resources(pdf_path=None):
+    """Build the index before serving; keep embeddings resident until shutdown."""
+    path = Path(pdf_path) if pdf_path is not None else DEFAULT_PDF
+    model = os.environ.get("PDF_EMBEDDING_MODEL", EMBEDDING_MODEL)
+    try:
+        with trace_step("pdf.prepare"):
+            metadata = path.stat()
+            _semantic_index(str(path.resolve()), metadata.st_mtime_ns, metadata.st_size, model)
+        yield
+    finally:
+        _semantic_index.cache_clear()
+        _read_chunks.cache_clear()
+        try:
+            with trace_step("pdf.unload"):
+                with Client(host="http://127.0.0.1:11434", timeout=120, trust_env=False) as client:
+                    client.generate(model=model, keep_alive=0)
+        except Exception:
+            LOGGER.warning("Embedding model unload failed during shutdown", exc_info=True)
 
 
 def consult_pdf(question: str, pdf_path=None) -> dict:
