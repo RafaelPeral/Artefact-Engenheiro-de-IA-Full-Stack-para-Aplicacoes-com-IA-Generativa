@@ -51,3 +51,22 @@ Monetary columns preserve the CSV names and amounts in Brazilian reais with
 `NUMERIC` affinity. SQLite may store fractional values as floating point;
 use integer cents if exact financial calculations are required. Order totals
 are preserved because the CSVs do not provide historical item prices.
+
+## Testing and coverage
+
+Install development dependencies inside the active virtual environment:
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest
+```
+
+`pytest.ini` enables branch
+coverage and reports uncovered lines in the terminal. It also generates
+`htmlcov/index.html`, which can be opened in a browser to inspect individual
+lines and branches. Coverage artifacts are ignored by Git.
+
+Tests use a fresh temporary directory inside `.pytest_cache/` for each run
+and remove it on exit. This avoids permission errors in shared Windows
+`Temp/pytest-of-*` directories. An explicit `--basetemp` overrides this default.
+
