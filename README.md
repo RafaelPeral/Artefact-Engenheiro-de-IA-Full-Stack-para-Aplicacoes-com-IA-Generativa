@@ -1,5 +1,57 @@
 # Artefact AI Engineering Project
 
+## Question API
+
+The API exposes one question endpoint: `POST /questions`. It uses the existing
+local LLM to answer the supplied question. SQL routing and PDF retrieval
+remain outside this step. Swagger is available at `http://127.0.0.1:8000/docs`.
+Expand `POST /questions`, click **Try it out**, enter text in the required
+`question` parameter box, and click **Execute**. No JSON request body is needed.
+The OpenAPI schema is available at `/openapi.json`.
+
+Update your Python environment after pulling these API changes:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+Prepare weights with `make model` on Windows or the preparation command
+above on Linux, then start the API with `make run` (Windows) or:
+
+```bash
+python -m uvicorn app.app:app --host 127.0.0.1 --port 8000
+```
+
+Send a question from another PowerShell terminal:
+
+```powershell
+$question = [Uri]::EscapeDataString("What is the capital of the United States?")
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/questions?question=$question"
+```
+
+On Linux:
+
+```bash
+curl -X POST -G http://127.0.0.1:8000/questions \
+  --data-urlencode 'question=What is the capital of the United States?'
+```
+
+Successful responses contain an `answer` string, for example:
+
+```json
+{"answer": "The capital of the United States is Washington, D.C."}
+```
+
+Missing or blank questions return HTTP 422. Query parameters are strings. An unavailable local
+model server returns 503; inference timeouts return 504; other model failures
+return 502. Startup fails if initialization cannot load the prepared model.
+
+The FastAPI lifespan initializes the LLM once and releases its owned
+resources when the API shuts down. Use a single Uvicorn worker for this
+machine. Questions are handled one at a time to limit inference memory use;
+blocking inference runs in FastAPI's thread pool. Existing stage tracing and
+inference metrics remain enabled, with `api.question` timing each request.
+
 ## Application lifecycle
 
 ### Execution tracing and performance

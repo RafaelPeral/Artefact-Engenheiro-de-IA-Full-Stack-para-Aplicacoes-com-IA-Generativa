@@ -1,8 +1,13 @@
 # Used by Exploration.py to read and inspect CSV files.
 pandas
 
-# SQLite_Creation.py uses only Python standard library modules.
-
-# Local model client and HTTP transport.
+# Local LLM client used by app/initialize_llm.py. Install Ollama separately.
 ollama
+
+# HTTP API, ASGI server, request validation, and HTTP client/testing.
+fastapi
+uvicorn
+pydantic>=2,<3
 httpx
+
+# SQLite_Creation.py uses only Python standard library modules.
