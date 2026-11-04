@@ -119,6 +119,11 @@ def initialize_llm(
                     )
                     log_inference_metrics(response)
                     content = response.message.content
+                    LOGGER.info(
+                        "LLM_OUTPUT | mode=%s | content=%s",
+                        "structured" if response_format is not None else "text",
+                        json.dumps(content, ensure_ascii=False),
+                    )
                     if not content or not content.strip():
                         raise RuntimeError(
                             "The local model returned no response"

@@ -84,6 +84,7 @@ def consult_pdf(question: str, pdf_path=None) -> dict:
         raise ValueError("question must be a non-empty string")
     path = Path(pdf_path) if pdf_path is not None else DEFAULT_PDF
     with trace_step("tool.consult_pdf"):
+        LOGGER.info("TOOL_INPUT consult_pdf | %s", json.dumps({"question": question}, ensure_ascii=False))
         try:
             model = os.environ.get("PDF_EMBEDDING_MODEL", EMBEDDING_MODEL)
             minimum = float(os.environ.get("PDF_MIN_SIMILARITY", "0.3"))
@@ -113,4 +114,5 @@ def consult_pdf(question: str, pdf_path=None) -> dict:
                   "retrieval": "semantic", "embedding_model": model,
                   "minimum_similarity": minimum,
                   "candidate_scores": [round(item[0], 6) for item in ranked[:3]]}
+        LOGGER.info("TOOL_OUTPUT consult_pdf | %s", json.dumps(result, ensure_ascii=False))
         return result

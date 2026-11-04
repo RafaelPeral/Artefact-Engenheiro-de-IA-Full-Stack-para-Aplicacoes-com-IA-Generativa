@@ -106,6 +106,8 @@ def test_structured_output_schema_reaches_ollama(runtime, caplog):
         )
     assert result == '{"question_type":"out_of_scope"}'
     assert runtime.client.chat.call_args.kwargs["format"] == schema
+    assert "LLM_OUTPUT | mode=structured" in caplog.text
+    assert "out_of_scope" in caplog.text
 
 
 def test_application_error_still_releases_resources(runtime):

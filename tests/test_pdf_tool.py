@@ -164,6 +164,14 @@ def test_embedding_service_errors_are_explicit(monkeypatch, error, message):
         pdf_tool._embed(["query"], "embeddinggemma")
 
 
+def test_tool_logs_complete_evidence_and_scores(semantic_runtime, caplog):
+    path, _ = semantic_runtime
+    with caplog.at_level(logging.INFO, logger="project"):
+        result = pdf_tool.consult_pdf("Mudei de ideia", path)
+    output = next(record.getMessage() for record in caplog.records
+                  if record.getMessage().startswith("TOOL_OUTPUT"))
+    assert json.loads(output.split(" | ", 1)[1]) == result
+    assert "TOOL_INPUT consult_pdf" in caplog.text
 
 
 @pytest.mark.skipif(os.environ.get("RUN_OLLAMA_RAG_TESTS") != "1",

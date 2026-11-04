@@ -31,4 +31,5 @@ def ask_question(
             question_type=result.question_type,
             requires_lookup=result.requires_lookup,
         )
+        LOGGER.info("API_ANSWER | %s", response.model_dump_json())
         return response
