@@ -221,3 +221,6 @@ __marimo__/
 
 #Store
 *.db
+
+# Generated local performance measurements.
+reports/performance/
