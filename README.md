@@ -171,7 +171,7 @@ and installation commands for other distributions.
 5. Download the model independently from application startup:
 
    ```bash
-   python -c "from app.prepare_model import prepare_model; prepare_model()"
+   python -c "from app.infrastructure.llm.preparation import prepare_model; prepare_model()"
    ```
 
    Preparation downloads weights without performing inference. The temporary
@@ -206,7 +206,7 @@ For a smaller model, prepare it explicitly and select the same name when
 calling `initialize_llm(model="llama3.2:1b")`:
 
 ```bash
-python -c "from app.prepare_model import prepare_model; prepare_model('llama3.2:1b')"
+python -c "from app.infrastructure.llm.preparation import prepare_model; prepare_model('llama3.2:1b')"
 ```
 
 ## Question API
@@ -351,7 +351,7 @@ functions elsewhere, call `configure_logging()` once at your entry point.
 Additional operations can use the same timer:
 
 ```python
-from app.tracing import configure_logging, trace_step
+from app.core.tracing import configure_logging, trace_step
 
 configure_logging()
 with trace_step("database.import"):
@@ -363,7 +363,7 @@ with trace_step("database.import"):
 The application owns startup and shutdown through a context manager:
 
 ```python
-from app.initialize_llm import initialize_llm
+from app.infrastructure.llm.client import initialize_llm
 
 with initialize_llm() as generate_response:
     reply = generate_response("Hello!")
@@ -393,7 +393,7 @@ add to NVIDIA VRAM. If necessary, use `initialize_llm(model="llama3.2:1b")`.
 Llama 3.3 70B's approximately 43 GB quantized download is unsuitable here.
 Local inference needs no paid API; Meta's community license applies.
 
-Importing `app.initialize_llm` has no startup side effects. Responses are
+Importing `app.infrastructure.llm.client` has no startup side effects. Responses are
 independent; conversation history is not stored. A custom system prompt can
 be supplied as the response function's second argument. Server launch logs
 are written to `artefact-ollama-server.log` in the system temporary directory.
@@ -414,7 +414,7 @@ Use the single public function from Python 3.9 or later. No external
 packages are required. Importing the module performs no database operations.
 
 ```python
-from app.SQLite_Creation import create_database
+from app.infrastructure.database.sqlite import create_database
 
 counts = create_database()
 ```
@@ -485,12 +485,12 @@ the ASGI interface. Each functional application module has its own tests:
 | Application module | Test module | Latest combined line/branch coverage |
 | --- | --- | --- |
 | app/app.py | tests/test_app.py | 100% |
-| app/question_routing.py | tests/test_question_routing.py | 100% |
-| app/initialize_llm.py | tests/test_initialize_llm.py | 96% |
-| app/ollama_server.py | tests/test_ollama_server.py | 97% |
-| app/prepare_model.py | tests/test_prepare_model.py | 100% |
-| app/tracing.py | tests/test_tracing.py | 99% |
-| app/SQLite_Creation.py | tests/test_sqlite_creation.py | 98% |
+| app/services/classification.py | tests/test_question_routing.py | 100% |
+| app/infrastructure/llm/client.py | tests/test_initialize_llm.py | 96% |
+| app/infrastructure/llm/server.py | tests/test_ollama_server.py | 97% |
+| app/infrastructure/llm/preparation.py | tests/test_prepare_model.py | 100% |
+| app/core/tracing.py | tests/test_tracing.py | 99% |
+| app/infrastructure/database/sqlite.py | tests/test_sqlite_creation.py | 98% |
 
 The latest Windows run passed 104 tests with 98% overall combined line/branch
 coverage, compared with the original 21 tests and 62%.

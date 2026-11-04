@@ -2,8 +2,8 @@
 
 from ollama import Client
 
-from .ollama_server import ollama_server
-from .tracing import trace_step
+from .server import ollama_server
+from app.core.tracing import trace_step
 
 
 def prepare_model(model: str = "llama3.2:3b") -> None:

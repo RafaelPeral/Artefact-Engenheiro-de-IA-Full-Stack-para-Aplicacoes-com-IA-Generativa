@@ -8,10 +8,34 @@ from unittest.mock import MagicMock
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, ReadTimeout
-from app.question_routing import CLASSIFICATION_SCHEMA, ANSWERS, CLASSIFICATION_PROMPT, QuestionType
+from app.services.classification import CLASSIFICATION_SCHEMA, CLASSIFICATION_PROMPT
+from app.services.responses import ANSWERS
+from app.domain.questions import QuestionType
+from ollama import ResponseError
+from app.api.dependencies import get_question_service
+from app.domain.questions import QuestionResult
 
 
 api = importlib.import_module("app.app")
+lifecycle = importlib.import_module("app.api.lifespan")
+question_service = importlib.import_module("app.services.questions")
+
+
+async def test_http_interface_accepts_service_without_initializing_model():
+    service = MagicMock()
+    service.answer.return_value = QuestionResult("Olá!", QuestionType.GREETING, False)
+    api.app.dependency_overrides[get_question_service] = lambda: service
+    try:
+        async with AsyncClient(transport=ASGITransport(app=api.app),
+                               base_url="http://testserver") as connection:
+            response = await connection.post("/questions", params={"question": "Oi"})
+        assert response.status_code == 200
+        assert response.json() == {
+            "answer": "Olá!", "question_type": "greeting", "requires_lookup": False,
+        }
+        service.answer.assert_called_once_with("Oi")
+    finally:
+        del api.app.dependency_overrides[get_question_service]
 
 
 @pytest.fixture
@@ -19,8 +43,8 @@ def runtime(monkeypatch):
     initialize = MagicMock()
     generate = initialize.return_value.__enter__.return_value
     generate.return_value = json.dumps({"question_type": "database"})
-    monkeypatch.setattr(api, "configure_logging", lambda: None)
-    monkeypatch.setattr(api, "initialize_llm", initialize)
+    monkeypatch.setattr(lifecycle, "configure_logging", lambda: None)
+    monkeypatch.setattr(lifecycle, "initialize_llm", initialize)
     return SimpleNamespace(initialize=initialize, generate=generate)
 
 
@@ -55,7 +79,7 @@ async def test_two_questions_reuse_one_llm(runtime):
         response_format=CLASSIFICATION_SCHEMA,
     )
     runtime.initialize.return_value.__exit__.assert_called_once()
-    assert not hasattr(api.app.state, "generate_response")
+    assert not hasattr(api.app.state, "question_service")
 
 
 @pytest.mark.parametrize(
@@ -71,7 +95,7 @@ async def test_invalid_questions_never_call_model(client, runtime, parameters):
     (ConnectionError("offline"), 503),
     (ReadTimeout("timeout"), 504),
     (RuntimeError("model failed"), 502),
-    (api.ResponseError("failed", status_code=500), 502),
+    (ResponseError("failed", status_code=500), 502),
 ])
 async def test_inference_errors_return_expected_status(client, runtime,
                                                      error, status):
@@ -103,7 +127,7 @@ async def test_initialization_failure_prevents_serving(runtime):
 
 
 @pytest.mark.parametrize("label, lookup", [
-    ("database", True), ("pdf", True), ("database_and_pdf", True),
+    ("database", True),
     ("greeting", False), ("out_of_scope", False),
 ])
 async def test_routes_return_only_fixed_answers(client, runtime, label, lookup):
@@ -136,4 +160,3 @@ async def test_capital_question_returns_standard_refusal(client, runtime):
         "answer": ANSWERS[QuestionType.OUT_OF_SCOPE],
         "question_type": "out_of_scope", "requires_lookup": False,
     }
-

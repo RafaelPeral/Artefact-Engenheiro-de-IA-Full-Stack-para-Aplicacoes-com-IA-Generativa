@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from app.question_routing import CLASSIFICATION_SCHEMA, CLASSIFICATION_PROMPT, QuestionType, classify_question
+from app.services.classification import CLASSIFICATION_SCHEMA, CLASSIFICATION_PROMPT, QuestionType, classify_question
 
 
 @pytest.mark.parametrize("question, label", [

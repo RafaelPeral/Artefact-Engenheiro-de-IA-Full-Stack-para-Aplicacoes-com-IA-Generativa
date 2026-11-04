@@ -1,17 +1,15 @@
 """Initialize the local language model for reuse by the application."""
 
 import math
+import json
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 from ollama import Client, ResponseError
 
-if __package__:
-    from .ollama_server import ollama_server
-    from .tracing import LOGGER, log_inference_metrics, trace_step
-else:
-    from ollama_server import ollama_server
-    from tracing import LOGGER, log_inference_metrics, trace_step
+from .server import ollama_server
+from app.core.tracing import LOGGER, log_inference_metrics, trace_step
+from app.prompts import load_prompt
 
 
 @contextmanager
@@ -98,17 +96,15 @@ def initialize_llm(
 
             def generate_response(
                 message: str,
-                system_prompt: str = (
-                    "You are a store assistant. Reply in the user's language. "
-                    "Do not invent product data, order details, or policies. "
-                    "If verified data is unavailable, state that clearly."
-                ),
+                system_prompt: str | None = None,
                 *,
                 response_format: dict | None = None,
             ) -> str:
                 """Generate a response using the model selected at startup."""
                 if not isinstance(message, str) or not message.strip():
                     raise ValueError("message must be a non-empty string")
+                if system_prompt is None:
+                    system_prompt = load_prompt("assistant.md")
                 with trace_step("llm.generate"):
                     response = client.chat(
                         model=model,

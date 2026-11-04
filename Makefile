@@ -25,7 +25,7 @@ install:
 	$(MAKE) ollama
 
 model:
-	python -c "from app.tracing import configure_logging; from app.prepare_model import prepare_model; configure_logging(); prepare_model()"
+	python -c "from app.core.tracing import configure_logging; from app.infrastructure.llm.preparation import prepare_model; configure_logging(); prepare_model()"
 
 run:
 	python -m uvicorn app.app:app --host 127.0.0.1 --port 8000

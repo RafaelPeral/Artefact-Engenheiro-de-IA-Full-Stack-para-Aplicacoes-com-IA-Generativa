@@ -1,6 +1,7 @@
 """Test inference initialization separately from server process management."""
 
 import importlib
+import logging
 from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -8,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 
-llm = importlib.import_module("app.initialize_llm")
+llm = importlib.import_module("app.infrastructure.llm.client")
 
 
 @pytest.fixture
@@ -91,14 +92,14 @@ def test_startup_errors_cleanup_without_downloading(runtime, error, expected):
     runtime.lifecycle.stop.assert_called_once()
 
 
-def test_structured_output_schema_reaches_ollama(runtime):
+def test_structured_output_schema_reaches_ollama(runtime, caplog):
     schema = {
         "type": "object",
         "properties": {"question_type": {"type": "string", "enum": ["out_of_scope"]}},
         "required": ["question_type"],
     }
     runtime.client.chat.return_value.message.content = '{"question_type":"out_of_scope"}'
-    with llm.initialize_llm() as respond:
+    with caplog.at_level(logging.INFO, logger="project"), llm.initialize_llm() as respond:
         result = respond(
             "Qual é a capital dos Estados Unidos?", "Classifique a pergunta.",
             response_format=schema,

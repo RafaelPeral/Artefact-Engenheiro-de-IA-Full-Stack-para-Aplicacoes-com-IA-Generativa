@@ -13,7 +13,7 @@ def create_database(data_dir=None, database_path=None):
 
     Args:
         data_dir: CSV directory; defaults to data in the project root.
-        database_path: SQLite file; defaults to store.db beside this module.
+        database_path: SQLite file; defaults to app/store.db.
 
     Returns:
         A dictionary mapping table names to imported row counts.
@@ -22,7 +22,7 @@ def create_database(data_dir=None, database_path=None):
     Invalid data rolls back the entire import and raises an exception.
     The database connection is always closed before returning.
     """
-    base_dir = Path(__file__).resolve().parent
+    base_dir = Path(__file__).resolve().parents[2]
     # Import parent records before the rows that reference them.
     table_schemas = {
         "categories": """

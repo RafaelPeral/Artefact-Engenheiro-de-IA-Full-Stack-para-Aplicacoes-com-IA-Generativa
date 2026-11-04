@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from app import tracing
+from app.core import tracing
 
 
 def test_success_reports_elapsed_time(monkeypatch, caplog):

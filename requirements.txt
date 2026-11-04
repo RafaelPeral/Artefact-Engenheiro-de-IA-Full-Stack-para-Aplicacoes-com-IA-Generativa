@@ -1,7 +1,7 @@
 # Used by Exploration.py to read and inspect CSV files.
 pandas
 
-# Local LLM client used by app/initialize_llm.py. Install Ollama separately.
+# Local LLM client used by app/infrastructure/llm/client.py. Install Ollama separately.
 ollama
 
 # HTTP API, ASGI server, request validation, and HTTP client/testing.
