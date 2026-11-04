@@ -14,7 +14,8 @@ such as "Quais os produtos vocês vendem?" or "Qual o horário de funcionamento?
 could be answered deterministically from the product catalog or configured
 business information, without invoking an LLM for each response. This would
 reduce inference cost and latency while keeping answers tied to maintained
-data. The current implementation does not yet provide this routing.
+data. The current implementation classifies intent, but does not yet provide
+these deterministic catalog or policy lookups.
 
 Cost and the available hardware were the main drivers of the model choice.
 The project uses a compact, quantized `llama3.2:3b` model running locally to
@@ -211,8 +212,9 @@ python -c "from app.prepare_model import prepare_model; prepare_model('llama3.2:
 ## Question API
 
 The API exposes one question endpoint: `POST /questions`. It uses the existing
-local LLM to answer the supplied question. SQL routing and PDF retrieval
-remain outside this step. Swagger is available at `http://127.0.0.1:8000/docs`.
+local LLM to classify the supplied question; it does not generate factual
+answers or execute SQL/PDF lookups yet. Swagger is available at
+`http://127.0.0.1:8000/docs`.
 Expand `POST /questions`, click **Try it out**, enter text in the required
 `question` parameter box, and click **Execute**. No JSON request body is needed.
 The OpenAPI schema is available at `/openapi.json`.
@@ -233,7 +235,7 @@ python -m uvicorn app.app:app --host 127.0.0.1 --port 8000
 Send a question from another PowerShell terminal:
 
 ```powershell
-$question = [Uri]::EscapeDataString("What is the capital of the United States?")
+$question = [Uri]::EscapeDataString("Quais produtos vocês vendem?")
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/questions?question=$question"
 ```
 
@@ -241,14 +243,38 @@ On Linux:
 
 ```bash
 curl -X POST -G http://127.0.0.1:8000/questions \
-  --data-urlencode 'question=What is the capital of the United States?'
+  --data-urlencode 'question=Quais produtos vocês vendem?'
 ```
 
-Successful responses contain an `answer` string, for example:
+Successful responses contain a fixed `answer`, the `question_type`, and
+`requires_lookup`. For example:
 
 ```json
-{"answer": "The capital of the United States is Washington, D.C."}
+{
+  "answer": "Esta pergunta necessita de consulta ao banco de dados da Empório da Música. Essa consulta ainda não está implementada.",
+  "question_type": "database",
+  "requires_lookup": true
+}
 ```
+
+| Question type | Intended source or response |
+| --- | --- |
+| `database` | Catalog, prices, stock, promotions, customers and orders |
+| `pdf` | Store policies and institutional information, including opening hours |
+| `database_and_pdf` | Questions requiring both sources |
+| `greeting` | Fixed greeting introducing the store assistant |
+| `out_of_scope` | Fixed refusal for subjects outside the store context |
+
+Out-of-scope questions receive: "Não sei responder, pois meus conhecimentos
+se limitam aos assuntos da Empório da Música." Greetings and out-of-scope
+messages have `requires_lookup: false`; all other routes return a pending
+lookup notice. No source contents are read in this phase. The model is called
+only to classify intent, including greetings and unrelated questions. Its
+output is constrained through Ollama's `format` JSON Schema to an object
+containing `question_type` with one of the allowed labels. The application
+also validates the returned JSON; invalid output returns HTTP 502
+instead of being presented as an answer. Classification is model-based and
+may be incorrect; mocked tests verify the contract, not semantic accuracy.
 
 Missing or blank questions return HTTP 422. Query parameters are strings. An unavailable local
 model server returns 503; inference timeouts return 504; other model failures
@@ -371,7 +397,8 @@ Importing `app.initialize_llm` has no startup side effects. Responses are
 independent; conversation history is not stored. A custom system prompt can
 be supplied as the response function's second argument. Server launch logs
 are written to `artefact-ollama-server.log` in the system temporary directory.
-Routing, SQL access, PDF retrieval, and semantic embeddings are not yet wired.
+Intent routing is implemented; SQL access, PDF retrieval, and semantic
+embeddings are not yet wired.
 
 Validation uses pytest; see the testing and coverage section below.
 Ollama services and downloads are mocked, and SQLite uses temporary files.
@@ -458,13 +485,14 @@ the ASGI interface. Each functional application module has its own tests:
 | Application module | Test module | Latest combined line/branch coverage |
 | --- | --- | --- |
 | app/app.py | tests/test_app.py | 100% |
+| app/question_routing.py | tests/test_question_routing.py | 100% |
 | app/initialize_llm.py | tests/test_initialize_llm.py | 96% |
 | app/ollama_server.py | tests/test_ollama_server.py | 97% |
 | app/prepare_model.py | tests/test_prepare_model.py | 100% |
 | app/tracing.py | tests/test_tracing.py | 99% |
 | app/SQLite_Creation.py | tests/test_sqlite_creation.py | 98% |
 
-The latest Windows run passed 79 tests with 98% overall combined line/branch
+The latest Windows run passed 104 tests with 98% overall combined line/branch
 coverage, compared with the original 21 tests and 62%.
 
 Tests never start real Ollama processes, download weights, or run inference.
