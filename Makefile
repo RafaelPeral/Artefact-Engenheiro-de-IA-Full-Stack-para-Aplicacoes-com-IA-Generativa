@@ -1,7 +1,7 @@
 SHELL := powershell.exe
 .SHELLFLAGS := -NoProfile -Command
 
-.PHONY: help install ollama pip model run test
+.PHONY: help install ollama pip model embeddings run test
 
 help:
 	@Write-Host "$$([char]27)[1;36mAvailable commands:$$([char]27)[0m"
@@ -9,6 +9,7 @@ help:
 	@Write-Host "$$([char]27)[1;33mmake run$$([char]27)[0m"
 	@Write-Host "$$([char]27)[1;35mmake ollama$$([char]27)[0m"
 	@Write-Host "$$([char]27)[1;36mmake model$$([char]27)[0m"
+	@Write-Host "$$([char]27)[1;36mmake embeddings$$([char]27)[0m"
 	@Write-Host "$$([char]27)[1;36mmake test$$([char]27)[0m"
 
 ollama:
@@ -26,6 +27,9 @@ install:
 
 model:
 	python -c "from app.core.tracing import configure_logging; from app.infrastructure.llm.preparation import prepare_model; configure_logging(); prepare_model()"
+
+embeddings:
+	python -c "from app.core.tracing import configure_logging; from app.infrastructure.llm.preparation import prepare_model; configure_logging(); prepare_model('embeddinggemma')"
 
 run:
 	python -m uvicorn app.app:app --host 127.0.0.1 --port 8000

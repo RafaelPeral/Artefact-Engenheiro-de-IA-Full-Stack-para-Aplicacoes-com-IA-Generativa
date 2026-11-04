@@ -1,4 +1,5 @@
 """Deterministic store responses."""
+
 from app.domain.questions import QuestionType
 
 ANSWERS = {
@@ -13,14 +14,5 @@ ANSWERS = {
     QuestionType.DATABASE: (
         "Esta pergunta necessita de consulta ao banco de dados da Empório "
         "da Música. Essa consulta ainda não está implementada."
-    ),
-    QuestionType.PDF: (
-        "Esta pergunta necessita de consulta ao PDF de políticas da Empório "
-        "da Música. Essa consulta ainda não está implementada."
-    ),
-    QuestionType.DATABASE_AND_PDF: (
-        "Esta pergunta necessita de consultas ao banco de dados e ao PDF "
-        "de políticas da Empório da Música. Essas consultas ainda não "
-        "estão implementadas."
     ),
 }

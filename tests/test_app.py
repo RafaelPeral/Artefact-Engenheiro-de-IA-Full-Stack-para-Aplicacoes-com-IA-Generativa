@@ -11,6 +11,7 @@ from httpx import ASGITransport, AsyncClient, ReadTimeout
 from app.services.classification import CLASSIFICATION_SCHEMA, CLASSIFICATION_PROMPT
 from app.services.responses import ANSWERS
 from app.domain.questions import QuestionType
+from app.tools.pdf_search import PdfLookupError
 from ollama import ResponseError
 from app.api.dependencies import get_question_service
 from app.domain.questions import QuestionResult
@@ -160,3 +161,48 @@ async def test_capital_question_returns_standard_refusal(client, runtime):
         "answer": ANSWERS[QuestionType.OUT_OF_SCOPE],
         "question_type": "out_of_scope", "requires_lookup": False,
     }
+
+
+@pytest.mark.parametrize("label", ["pdf", "database_and_pdf"])
+async def test_pdf_tool_result_is_used_for_final_answer(client, runtime, monkeypatch, label):
+    evidence = {"source": "policies.pdf", "excerpts": [{"page": 2, "text": "09:00 às 18:00"}], "found": True}
+    tool = MagicMock(return_value=evidence)
+    monkeypatch.setattr(api.app.state.question_service, "_pdf_lookup", tool)
+    runtime.generate.side_effect = [json.dumps({"question_type": label}), "Das 09:00 às 18:00 (página 2)."]
+    response = await client.post("/questions", params={"question": "Qual o horário?"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answer"].startswith("Das 09:00 às 18:00 (página 2).")
+    assert body["question_type"] == label
+    assert body["requires_lookup"] is True
+    if label == "database_and_pdf":
+        assert ANSWERS[QuestionType.DATABASE] in body["answer"]
+    tool.assert_called_once_with("Qual o horário?")
+    prompt, system = runtime.generate.call_args.args
+    assert json.loads(prompt)["pdf_tool_result"] == evidence
+    assert system == question_service.PDF_ANSWER_PROMPT
+    assert runtime.generate.call_count == 2
+
+
+async def test_pdf_failure_returns_503_without_fabricating_answer(client, runtime, monkeypatch):
+    runtime.generate.return_value = '{"question_type":"pdf"}'
+    monkeypatch.setattr(api.app.state.question_service, "_pdf_lookup", MagicMock(side_effect=PdfLookupError("missing")))
+    response = await client.post("/questions", params={"question": "Horários?"})
+    assert response.status_code == 503
+    assert runtime.generate.call_count == 1
+
+
+@pytest.mark.parametrize("label", ["database", "greeting", "out_of_scope"])
+async def test_other_routes_never_consult_pdf(client, runtime, monkeypatch, label):
+    tool = MagicMock()
+    monkeypatch.setattr(api.app.state.question_service, "_pdf_lookup", tool)
+    runtime.generate.return_value = json.dumps({"question_type": label})
+    assert (await client.post("/questions", params={"question": "Mensagem"})).status_code == 200
+    tool.assert_not_called()
+
+
+async def test_pdf_answer_timeout_preserves_error_mapping(client, runtime, monkeypatch):
+    monkeypatch.setattr(api.app.state.question_service, "_pdf_lookup", MagicMock(return_value={"excerpts": [], "found": False}))
+    runtime.generate.side_effect = ['{"question_type":"pdf"}', ReadTimeout("timeout")]
+    response = await client.post("/questions", params={"question": "Horário?"})
+    assert response.status_code == 504

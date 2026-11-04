@@ -10,4 +10,7 @@ uvicorn
 pydantic>=2,<3
 httpx
 
-# SQLite_Creation.py uses only Python standard library modules.
+# Extract text from the store policy PDF for local retrieval.
+pypdf>=5,<7
+
+# The SQLite importer uses only Python standard library modules.
