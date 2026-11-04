@@ -30,6 +30,57 @@ unimportant to users: higher demand, stricter response-time targets, or a
 high rate of repeated questions would justify revisiting the architecture,
 including deterministic handlers, caching, and the inference infrastructure.
 
+## Application structure
+
+The project uses a layered service architecture for a JSON API. HTTP handling,
+the question use case, domain types, and external integrations have separate
+modules; there is no server-rendered view layer.
+
+```text
+app/
+  app.py                       # FastAPI entry point and HTTP endpoint
+  api/
+    schemas.py                 # HTTP response contracts
+    dependencies.py            # Service dependency resolution
+    error_handlers.py          # Application errors -> HTTP responses
+    lifespan.py                # Resource composition and cleanup
+  domain/
+    questions.py               # Question categories and result dataclass
+    errors.py                  # Application errors without HTTP status codes
+  services/
+    questions.py               # Classification -> retrieval -> generation
+    classification.py          # Intent classification and output validation
+    responses.py               # Deterministic greetings/refusals/notices
+  tools/
+    pdf_search.py              # Semantic PDF retrieval tool
+  infrastructure/
+    llm/client.py              # Ollama generation client and model lifecycle
+    llm/server.py              # Owned Ollama process lifecycle
+    llm/preparation.py         # Explicit weight downloads
+    database/sqlite.py         # CSV-to-SQLite import
+  core/
+    tracing.py                 # Logging, timings and inference metrics
+  prompts/
+    assistant.md               # Default generation instructions
+    classification.md          # Intent classification instructions
+    pdf_answer.md              # Evidence-grounded PDF answer instructions
+```
+
+`app.py` validates the query, obtains `QuestionService` through a FastAPI
+dependency, and serializes the result. It does not classify questions, query
+documents, construct model prompts, or manage inference concurrency.
+`QuestionService` owns that workflow and its inference lock; it returns a
+domain dataclass and translates provider failures into application errors.
+The API error handlers alone map these errors to HTTP status codes.
+
+Prompt text lives in UTF-8 Markdown resources and is loaded relative to the
+package, independently of the shell's working directory. Restart the API
+after editing a prompt because resources are cached for the process lifetime.
+JSON output schemas, retrieval prefixes, and deterministic response messages
+remain in their owning modules because they define program contracts or
+output data rather than system instructions. The public API entry point
+remains `app.app:app`; Python imports for internal modules follow the paths above.
+
 ## Project initialization
 
 Run all commands from the repository root, which contains `requirements.txt`,
@@ -212,8 +263,9 @@ python -c "from app.infrastructure.llm.preparation import prepare_model; prepare
 ## Question API
 
 The API exposes one question endpoint: `POST /questions`. It uses the existing
-local LLM to classify the supplied question; it does not generate factual
-answers or execute SQL/PDF lookups yet. Swagger is available at
+local LLM to classify the supplied question. PDF-related questions invoke
+the policy lookup tool, then the LLM generates an answer from the retrieved
+evidence. SQL lookups are not implemented yet. Swagger is available at
 `http://127.0.0.1:8000/docs`.
 Expand `POST /questions`, click **Try it out**, enter text in the required
 `question` parameter box, and click **Execute**. No JSON request body is needed.
@@ -267,14 +319,81 @@ Successful responses contain a fixed `answer`, the `question_type`, and
 
 Out-of-scope questions receive: "Não sei responder, pois meus conhecimentos
 se limitam aos assuntos da Empório da Música." Greetings and out-of-scope
-messages have `requires_lookup: false`; all other routes return a pending
-lookup notice. No source contents are read in this phase. The model is called
-only to classify intent, including greetings and unrelated questions. Its
+messages have `requires_lookup: false`. This field describes the question's
+source requirements, not whether retrieval is still pending. Database-only
+questions return a pending lookup notice. PDF questions receive a generated
+answer grounded in retrieved excerpts; mixed questions also explicitly state
+that database access is not implemented. The model first classifies intent,
+including greetings and unrelated questions. Its classification
 output is constrained through Ollama's `format` JSON Schema to an object
 containing `question_type` with one of the allowed labels. The application
 also validates the returned JSON; invalid output returns HTTP 502
 instead of being presented as an answer. Classification is model-based and
 may be incorrect; mocked tests verify the contract, not semantic accuracy.
+
+### PDF lookup tool
+
+`app/tools/pdf_search.py` provides the internal `consult_pdf(question)` tool. The
+application invokes it for `pdf` and `database_and_pdf` classifications;
+users keep calling only `POST /questions`. No separate tool endpoint is
+exposed, and the model does not decide whether to skip the required lookup.
+
+The tool implements a small local RAG pipeline: `pypdf` extracts text from
+`data/políticas_da_loja.pdf`, pages are split into overlapping excerpts,
+and Ollama generates embeddings using `embeddinggemma`. Query embeddings
+are compared with document embeddings by cosine similarity. There are no
+keyword rules or synonym dictionaries in retrieval. Up to three excerpts
+of 900 characters each are returned, with page numbers and similarity scores.
+For this small document, the vector index lives in memory; no vector database
+or additional embedding framework is needed. The index is reused until the
+PDF's path, modification time, size, or configured embedding model changes.
+
+Prepare the separate embedding model once, before asking PDF questions:
+
+```powershell
+make embeddings
+```
+
+On Linux, use:
+
+```bash
+python -c "from app.infrastructure.llm.preparation import prepare_model; prepare_model('embeddinggemma')"
+```
+
+The first PDF question builds the index; later questions embed only the query.
+Weights are released after embedding calls to limit memory overlap with the
+generation model. Both services use the application's local Ollama server;
+retrieval never downloads weights implicitly. A missing embedding model is
+reported in the logs with instructions to run `make embeddings`.
+
+`PDF_EMBEDDING_MODEL` selects another compatible embedding model. Query and
+document prefixes follow EmbeddingGemma's retrieval format; changing to an
+unrelated model may require adapting these prefixes. `PDF_MIN_SIMILARITY`
+sets the minimum cosine score (default `0.3`, range `-1` to `1`). This is a
+heuristic checked against a few return-policy paraphrases, not a calibrated
+confidence or probability; tune it against
+representative store questions. Retrieval can still return incomplete or
+irrelevant evidence. References: [Ollama embeddings](https://docs.ollama.com/capabilities/embeddings)
+and [EmbeddingGemma](https://ollama.com/library/embeddinggemma).
+
+The tool result and original question are passed to a second LLM call with
+instructions to use only that evidence, cite supporting pages, and say when
+the information was not found. These instructions reduce unsupported answers
+but do not guarantee model accuracy. Missing or unreadable PDFs return HTTP
+503; scanned documents need OCR, which is not implemented. The tool emits
+`tool.consult_pdf` stage logs. Install updated requirements and restart the API
+before testing, for example with `Qual o horário de funcionamento?` in Swagger.
+
+Mixed questions are answered in parts: retrieved return policies can be
+explained even when the product price is unavailable. General rules do not
+establish that a specific product or purchase is eligible for a return.
+
+At `INFO` level, diagnostic logs include `TOOL_INPUT consult_pdf` (question),
+`TOOL_OUTPUT consult_pdf` (full retrieved excerpts, pages, similarity scores,
+embedding model and threshold), `LLM_OUTPUT`
+(raw model output, with `structured` or `text` mode), and `API_ANSWER` (final
+response). Payloads are JSON-encoded so multiline content stays on one log
+line. `TRACE_LOG_FILE` retains these logs using the existing logging setup.
 
 Missing or blank questions return HTTP 422. Query parameters are strings. An unavailable local
 model server returns 503; inference timeouts return 504; other model failures
@@ -397,8 +516,8 @@ Importing `app.infrastructure.llm.client` has no startup side effects. Responses
 independent; conversation history is not stored. A custom system prompt can
 be supplied as the response function's second argument. Server launch logs
 are written to `artefact-ollama-server.log` in the system temporary directory.
-Intent routing is implemented; SQL access, PDF retrieval, and semantic
-embeddings are not yet wired.
+Intent routing, semantic embeddings and PDF retrieval are implemented;
+SQL access is not yet wired.
 
 Validation uses pytest; see the testing and coverage section below.
 Ollama services and downloads are mocked, and SQLite uses temporary files.
@@ -485,17 +604,36 @@ the ASGI interface. Each functional application module has its own tests:
 | Application module | Test module | Latest combined line/branch coverage |
 | --- | --- | --- |
 | app/app.py | tests/test_app.py | 100% |
+| app/api/ | tests/test_app.py | 100% |
+| app/services/questions.py | tests/test_question_service.py, tests/test_app.py | 100% |
 | app/services/classification.py | tests/test_question_routing.py | 100% |
-| app/infrastructure/llm/client.py | tests/test_initialize_llm.py | 96% |
-| app/infrastructure/llm/server.py | tests/test_ollama_server.py | 97% |
+| app/tools/pdf_search.py | tests/test_pdf_tool.py | 92% |
+| app/infrastructure/llm/client.py | tests/test_initialize_llm.py | 100% |
+| app/infrastructure/llm/server.py | tests/test_ollama_server.py | 99% |
 | app/infrastructure/llm/preparation.py | tests/test_prepare_model.py | 100% |
 | app/core/tracing.py | tests/test_tracing.py | 99% |
 | app/infrastructure/database/sqlite.py | tests/test_sqlite_creation.py | 98% |
 
-The latest Windows run passed 104 tests with 98% overall combined line/branch
+The latest default Windows run passed 140 tests, with 3 opt-in checks skipped,
+and 98% overall combined line/branch
 coverage, compared with the original 21 tests and 62%.
+The three opt-in semantic retrieval checks also passed against the real
+`embeddinggemma` model and policy PDF: the mixed Yamaha C40 question and
+Portuguese/English paraphrases of changing one's mind about an online purchase.
+These checks validate retrieval, not the final generation model's accuracy.
 
-Tests never start real Ollama processes, download weights, or run inference.
+The default test suite never starts real Ollama processes, downloads weights,
+or runs inference. PDF extraction uses the real document, while semantic
+ranking and API tests use controlled embedding/model responses. To evaluate
+paraphrases against the real embedding model, start Ollama, prepare
+`embeddinggemma`, and run the opt-in checks:
+
+```powershell
+$env:RUN_OLLAMA_RAG_TESTS = "1"
+python -m pytest tests/test_pdf_tool.py -k live_semantic --no-cov -v
+Remove-Item Env:RUN_OLLAMA_RAG_TESTS
+```
+
 Server launch options for Windows and Unix are checked through mocks; this
 does not validate GPU drivers, actual model speed, or Linux execution.
 SQLite tests import copies of the real CSV fixtures into temporary databases
@@ -508,7 +646,7 @@ For a focused run (the coverage report still includes all application modules):
 python -m pytest tests/test_sqlite_creation.py -v
 ```
 
-Remaining uncovered paths include direct-script import fallbacks and
-defensive checks. Coverage measures executed code, not answer quality or
+Remaining uncovered paths include defensive checks. Coverage measures
+executed code, not answer quality or
 production reliability. References: [pytest fixtures](https://docs.pytest.org/en/stable/how-to/fixtures.html)
 and [coverage reporting](https://pytest-cov.readthedocs.io/en/latest/reporting.html).
