@@ -1,5 +1,184 @@
 # Artefact AI Engineering Project
 
+## Project initialization
+
+Run all commands from the repository root, which contains `requirements.txt`,
+`Makefile`, and the `app` directory. Python 3.12 is the recommended version
+and the version used during development. Installation and model preparation
+require internet access; later inference uses the locally downloaded weights.
+
+### Operating system compatibility
+
+| Component | Windows | Linux |
+| --- | --- | --- |
+| Makefile | Uses Windows PowerShell (`powershell.exe`) | Not supported by the current recipes |
+| Runtime installation script | Installs Windows x64 binaries | Not supported; install manually below |
+| Python application and model preparation | Supported by the implementation | Designed to work with Ollama on PATH |
+| Server startup/shutdown | Windows process handling | Unix process handling |
+
+Windows installation checks and mocked lifecycle tests have been run.
+The Linux instructions follow Ollama's documentation but have not been
+validated end to end on a Linux machine. GPU acceleration also depends on
+the drivers and hardware supported by Ollama. macOS setup is not covered here.
+
+### Windows: step by step
+
+1. Install Python 3.12 with Python on PATH and install GNU Make. Use PowerShell
+   in the repository root and verify the commands are available:
+
+   ```powershell
+   python --version
+   make --version
+   ```
+
+2. Create and activate an isolated Python environment:
+
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   ```
+
+3. Install the Python dependencies and Ollama runtime:
+
+   ```powershell
+   make install
+   ```
+
+   `make pip` and `make ollama` run these steps separately. The setup script
+   reuses an existing installation or extracts the standalone Windows archive
+   into `%LOCALAPPDATA%/Programs/Ollama`. It does not start a server, download
+   model weights, or create a login startup entry. The application finds that
+   installation even when it is absent from PATH.
+
+4. If you installed the Ollama desktop application separately, quit it from
+   the system tray before continuing so the project can own server shutdown.
+   Download the model once:
+
+   ```powershell
+   make model
+   ```
+
+   This step starts a temporary server, downloads approximately 2 GB for
+   `llama3.2:3b`, and stops the server it started. It performs no inference.
+   Existing servers are reused and left running. Weights stay on disk.
+
+5. Start the project:
+
+   ```powershell
+   make run
+   ```
+
+   This starts the FastAPI server at `http://127.0.0.1:8000`. Leave the
+   terminal open while sending questions. Press Ctrl+C to stop the API and
+   release its owned server and model resources.
+
+6. For later runs, activate the environment again and run `make run`.
+   Repeat model preparation only when you need another model or update.
+   To leave the environment after the application exits:
+
+   ```powershell
+   deactivate
+   ```
+
+### Linux: step by step
+
+Use Bash and the Python commands below rather than the Windows Makefile.
+The package installation example targets Ubuntu/Debian. Adapt package names
+and installation commands for other distributions.
+
+1. Install Python, virtual environment support, and download/extraction tools:
+
+   ```bash
+   sudo apt-get update
+   sudo apt-get install python3 python3-venv python3-pip curl zstd
+   python3 --version
+   ```
+
+   Python 3.12 is recommended. Ensure your distribution supplies a compatible
+   Python version before proceeding.
+
+2. From the repository root, create the Python environment and install the
+   project dependencies:
+
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   python -m pip install --upgrade pip
+   python -m pip install -r requirements.txt
+   ```
+
+3. Install the Ollama runtime manually so installation does not start or
+   enable a background service. For a new Linux x86_64 installation:
+
+   ```bash
+   uname -m
+   curl -fL https://ollama.com/download/ollama-linux-amd64.tar.zst \
+     -o /tmp/ollama-linux-amd64.tar.zst
+   sudo tar --zstd -xf /tmp/ollama-linux-amd64.tar.zst -C /usr
+   command -v ollama
+   ```
+
+   For ARM64 (`aarch64`), use `ollama-linux-arm64.tar.zst` in both the URL
+   and local archive path. These are the archives listed in the
+   [official Linux installation instructions](https://docs.ollama.com/linux).
+   Skip the instructions for creating a startup service: the project manages
+   its server. Ollama's automatic installer may configure a system service.
+   If Ollama was already installed, reuse it rather than extracting over an
+   active installation.
+
+4. If an Ollama systemd service was previously installed, stop it and disable
+   automatic startup before giving the project control of the server:
+
+   ```bash
+   sudo systemctl disable --now ollama.service
+   ```
+
+   Run this command only when that service exists and you want it disabled.
+   Also stop any manually started `ollama serve` process in its own terminal.
+   For NVIDIA acceleration, install the appropriate driver for your Linux
+   distribution and verify it using `nvidia-smi`.
+
+5. Download the model independently from application startup:
+
+   ```bash
+   python -c "from app.prepare_model import prepare_model; prepare_model()"
+   ```
+
+   Preparation downloads weights without performing inference. The temporary
+   server is stopped afterward; a pre-existing server is left running.
+   Run this command and the application as the same user, without `sudo`,
+   so they use the same local model cache.
+
+6. Start the project:
+
+   ```bash
+   python -m uvicorn app.app:app --host 127.0.0.1 --port 8000
+   ```
+
+   Leave the API running while sending requests and stop it with Ctrl+C.
+   For later runs, activate `.venv` again and repeat this command; no download
+   is needed. Run `deactivate` after stopping the API.
+
+### Startup, shutdown, and troubleshooting
+
+Normal startup never downloads weights. A missing model produces an error
+asking for preparation: use `make model` on Windows or the preparation Python
+command above on Linux. Loading local weights into RAM/VRAM still takes time.
+
+Press Ctrl+C in the application's terminal to interrupt it and trigger
+cleanup. Only servers started by the project are stopped. A pre-existing
+Ollama server stays running; quit or stop it beforehand if you want the
+project to manage the full lifecycle. Forced process termination or power
+loss may bypass Python cleanup. Closing the Python environment with
+`deactivate` does not stop an independently running Ollama server.
+
+For a smaller model, prepare it explicitly and select the same name when
+calling `initialize_llm(model="llama3.2:1b")`:
+
+```bash
+python -c "from app.prepare_model import prepare_model; prepare_model('llama3.2:1b')"
+```
+
 ## Question API
 
 The API exposes one question endpoint: `POST /questions`. It uses the existing
@@ -235,7 +414,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-`pytest.ini` enables branch
+On Windows, `make test` runs the same suite. `pytest.ini` enables branch
 coverage and reports uncovered lines in the terminal. It also generates
 `htmlcov/index.html`, which can be opened in a browser to inspect individual
 lines and branches. Coverage artifacts are ignored by Git.
@@ -244,3 +423,35 @@ Tests use a fresh temporary directory inside `.pytest_cache/` for each run
 and remove it on exit. This avoids permission errors in shared Windows
 `Temp/pytest-of-*` directories. An explicit `--basetemp` overrides this default.
 
+The test suite uses pytest fixtures, parametrization, and pytest-asyncio for
+the ASGI interface. Each functional application module has its own tests:
+
+| Application module | Test module | Latest combined line/branch coverage |
+| --- | --- | --- |
+| app/app.py | tests/test_app.py | 100% |
+| app/initialize_llm.py | tests/test_initialize_llm.py | 96% |
+| app/ollama_server.py | tests/test_ollama_server.py | 97% |
+| app/prepare_model.py | tests/test_prepare_model.py | 100% |
+| app/tracing.py | tests/test_tracing.py | 99% |
+| app/SQLite_Creation.py | tests/test_sqlite_creation.py | 98% |
+
+The latest Windows run passed 79 tests with 98% overall combined line/branch
+coverage, compared with the original 21 tests and 62%.
+
+Tests never start real Ollama processes, download weights, or run inference.
+Server launch options for Windows and Unix are checked through mocks; this
+does not validate GPU drivers, actual model speed, or Linux execution.
+SQLite tests import copies of the real CSV fixtures into temporary databases
+and verify keys, constraints, updates, repeated imports, and transaction
+rollback. They do not write to the project's `app/store.db`.
+
+For a focused run (the coverage report still includes all application modules):
+
+```bash
+python -m pytest tests/test_sqlite_creation.py -v
+```
+
+Remaining uncovered paths include direct-script import fallbacks and
+defensive checks. Coverage measures executed code, not answer quality or
+production reliability. References: [pytest fixtures](https://docs.pytest.org/en/stable/how-to/fixtures.html)
+and [coverage reporting](https://pytest-cov.readthedocs.io/en/latest/reporting.html).
