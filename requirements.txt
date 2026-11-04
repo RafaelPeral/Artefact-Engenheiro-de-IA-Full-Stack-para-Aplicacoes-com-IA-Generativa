@@ -1,0 +1,4 @@
+# Used by Exploration.py to read and inspect CSV files.
+pandas
+
+# SQLite_Creation.py uses only Python standard library modules.
