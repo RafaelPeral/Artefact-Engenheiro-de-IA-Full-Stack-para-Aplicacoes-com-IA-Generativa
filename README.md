@@ -6,13 +6,13 @@ Use the single public function from Python 3.9 or later. No external
 packages are required. Importing the module performs no database operations.
 
 ```python
-from SQLite_Creation import create_database
+from app.SQLite_Creation import create_database
 
 counts = create_database()
 ```
 
-By default, CSVs are read from `data` beside the module and the database is
-created at `data/store.db`. You can supply both paths:
+By default, CSVs are read from the project-root `data` directory and the
+database is created at `app/store.db`. You can supply both paths:
 
 ```python
 counts = create_database(
@@ -22,7 +22,7 @@ counts = create_database(
 ```
 
 The destination directory must exist. If only `data_dir` is supplied, the
-database defaults to `store.db` inside that directory. The return value maps
+database still defaults to `app/store.db`, independently of `data_dir`. The return value maps
 each table name to its imported row count. Errors propagate to the caller.
 
 | Table | Primary key | Foreign keys |
@@ -51,6 +51,7 @@ Monetary columns preserve the CSV names and amounts in Brazilian reais with
 `NUMERIC` affinity. SQLite may store fractional values as floating point;
 use integer cents if exact financial calculations are required. Order totals
 are preserved because the CSVs do not provide historical item prices.
+
 
 ## Testing and coverage
 

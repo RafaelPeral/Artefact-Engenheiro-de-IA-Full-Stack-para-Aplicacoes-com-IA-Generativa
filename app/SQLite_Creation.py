@@ -12,8 +12,8 @@ def create_database(data_dir=None, database_path=None):
     """Create related tables and import all six CSV files atomically.
 
     Args:
-        data_dir: CSV directory; defaults to data beside this module.
-        database_path: SQLite file; defaults to store.db in data_dir.
+        data_dir: CSV directory; defaults to data in the project root.
+        database_path: SQLite file; defaults to store.db beside this module.
 
     Returns:
         A dictionary mapping table names to imported row counts.
@@ -161,8 +161,14 @@ def create_database(data_dir=None, database_path=None):
                 count += 1
         return count
 
-    data_dir = Path(data_dir) if data_dir is not None else base_dir / "data"
-    database_path = ("app/store.db")
+    data_dir = (
+        Path(data_dir) if data_dir is not None else base_dir.parent / "data"
+    )
+    database_path = (
+        Path(database_path)
+        if database_path is not None
+        else base_dir / "store.db"
+    )
     connection = sqlite3.connect(database_path)
     try:
         connection.execute("PRAGMA foreign_keys = ON")
