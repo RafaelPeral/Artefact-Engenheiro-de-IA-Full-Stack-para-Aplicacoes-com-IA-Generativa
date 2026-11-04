@@ -72,6 +72,55 @@ with trace_step("database.import"):
     counts = create_database()
 ```
 
+### Resource ownership
+
+The application owns startup and shutdown through a context manager:
+
+```python
+from app.initialize_llm import initialize_llm
+
+with initialize_llm() as generate_response:
+    reply = generate_response("Hello!")
+    print(reply)
+```
+
+Initialization starts a background server if needed, waits up to 30 seconds
+for readiness, verifies the model exists, and loads it from disk for inference.
+It never downloads weights. A missing model raises an error asking you to run
+`make model`. Loading weights into RAM/VRAM still takes time at startup, but
+network download time is confined to the preparation step.
+
+Leaving the `with` block unloads the model, stops the server started by the
+project, and closes the client. Cleanup also runs on startup failures,
+application exceptions, and normal Ctrl+C interruption. A pre-existing server
+is reused and never terminated; requests to that shared server use zero
+keep-alive so they do not leave the model loaded. Forced process termination
+or power loss can bypass Python cleanup. To let the project control the full
+server lifecycle, quit the Ollama tray application before running it.
+
+The default `llama3.2:3b` model uses Q4_K_M quantization, is approximately 2 GB,
+and supports Portuguese. A 2,048-token context and 256-token output budget
+are a starting point for the GTX 1650 (4 GB VRAM) and 16 GB system RAM.
+Runtime memory includes context and inference overhead; measure GPU placement
+and speed on the target machine. Intel integrated graphics memory does not
+add to NVIDIA VRAM. If necessary, use `initialize_llm(model="llama3.2:1b")`.
+Llama 3.3 70B's approximately 43 GB quantized download is unsuitable here.
+Local inference needs no paid API; Meta's community license applies.
+
+Importing `app.initialize_llm` has no startup side effects. Responses are
+independent; conversation history is not stored. A custom system prompt can
+be supplied as the response function's second argument. Server launch logs
+are written to `artefact-ollama-server.log` in the system temporary directory.
+Routing, SQL access, PDF retrieval, and semantic embeddings are not yet wired.
+
+Validation uses pytest; see the testing and coverage section below.
+Ollama services and downloads are mocked, and SQLite uses temporary files.
+
+Sources: [model](https://ollama.com/library/llama3.2:3b),
+[languages](https://ollama.com/library/llama3.2),
+[standalone Windows runtime](https://docs.ollama.com/windows), and
+[Python client](https://github.com/ollama/ollama-python).
+
 ## SQLite import
 
 Use the single public function from Python 3.9 or later. No external

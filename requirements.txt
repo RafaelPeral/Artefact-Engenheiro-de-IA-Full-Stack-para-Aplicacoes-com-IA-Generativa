@@ -2,3 +2,7 @@
 pandas
 
 # SQLite_Creation.py uses only Python standard library modules.
+
+# Local model client and HTTP transport.
+ollama
+httpx
