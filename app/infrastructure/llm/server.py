@@ -13,10 +13,7 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import ProxyHandler, build_opener
 
-if __package__:
-    from .tracing import LOGGER, trace_step
-else:
-    from tracing import LOGGER, trace_step
+from app.core.tracing import LOGGER, trace_step
 
 
 @contextmanager

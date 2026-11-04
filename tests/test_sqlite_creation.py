@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 
-storage = importlib.import_module("app.SQLite_Creation")
+storage = importlib.import_module("app.infrastructure.database.sqlite")
 EXPECTED_COUNTS = {
     "categories": 9, "customers": 50, "products": 65,
     "orders": 20, "order_items": 22, "promotions": 25,
@@ -63,11 +63,11 @@ def test_import_and_reimport_preserve_counts_and_integrity(csv_directory,
 
 def test_default_paths_are_relative_to_module(csv_directory, tmp_path,
                                              monkeypatch):
-    module = tmp_path / "app" / "SQLite_Creation.py"
-    module.parent.mkdir()
+    module = tmp_path / "app" / "infrastructure" / "database" / "sqlite.py"
+    module.parent.mkdir(parents=True)
     monkeypatch.setattr(storage, "__file__", str(module))
     assert storage.create_database() == EXPECTED_COUNTS
-    assert (module.parent / "store.db").is_file()
+    assert (module.parents[2] / "store.db").is_file()
 
 
 def test_foreign_keys_and_item_primary_key_enforced(csv_directory, tmp_path):

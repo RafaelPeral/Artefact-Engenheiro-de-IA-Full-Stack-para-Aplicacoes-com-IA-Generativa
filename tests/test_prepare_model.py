@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 
-preparation = importlib.import_module("app.prepare_model")
+preparation = importlib.import_module("app.infrastructure.llm.preparation")
 
 
 @pytest.fixture

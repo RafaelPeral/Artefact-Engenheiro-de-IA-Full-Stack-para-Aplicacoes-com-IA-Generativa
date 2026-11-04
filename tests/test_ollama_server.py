@@ -11,7 +11,7 @@ from urllib.error import URLError
 import pytest
 
 
-server = importlib.import_module("app.ollama_server")
+server = importlib.import_module("app.infrastructure.llm.server")
 
 
 def ready():
