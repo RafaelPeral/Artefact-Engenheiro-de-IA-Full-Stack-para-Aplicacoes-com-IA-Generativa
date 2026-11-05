@@ -24,6 +24,7 @@ CASES = {
     "greeting": ("Oi, tudo bem?", "greeting"),
     "out_of_scope": ("Qual é a capital dos Estados Unidos?", "out_of_scope"),
     "database": ("Quais produtos vocês vendem?", "database"),
+    "database_price": ("Qual o preço do produto 127?", "database"),
     "pdf": ("Qual o horário de funcionamento?", "pdf"),
     "mixed": ("Quanto custa o Yamaha C40 e posso devolvê-lo?", "database_and_pdf"),
 }
@@ -51,7 +52,14 @@ class Recorder:
             if retention is not None and (method in {"chat", "embed"} or
                                           (method == "generate" and "prompt" in kwargs)):
                 kwargs["keep_alive"] = retention
-            kind = ("classification" if kwargs.get("format") else "answer") if method == "chat" else method
+            kind = method
+            if method == "chat":
+                schema = kwargs.get("format")
+                if schema:
+                    kind = ("classification" if "question_type" in
+                            schema.get("properties", {}) else "database_plan")
+                else:
+                    kind = "answer"
             with self.measure(f"ollama.{kind}", model=kwargs.get("model"),
                               keep_alive=kwargs.get("keep_alive")) as sample:
                 response = original(client, *args, **kwargs)
@@ -91,6 +99,20 @@ def gpu_snapshot():
 
 
 async def benchmark(args, recorder):
+    """Own server bootstrap so benchmarking needs no manual ollama serve."""
+    from app.infrastructure.llm.server import ollama_server
+
+    context = ollama_server()
+    with recorder.measure("benchmark.server_startup"):
+        context.__enter__()
+    try:
+        return await _benchmark(args, recorder)
+    finally:
+        with recorder.measure("benchmark.server_shutdown"):
+            context.__exit__(None, None, None)
+
+
+async def _benchmark(args, recorder):
     with recorder.measure("python.application_imports"):
         from httpx import ASGITransport, AsyncClient
         from ollama import Client
@@ -146,7 +168,8 @@ async def benchmark(args, recorder):
             retention = args.embed_keep_alive if method == "embed" else args.keep_alive
             stack.enter_context(patch.object(Client, method, recorder.instrument_ollama(method, original, retention)))
         for module_name in ("app.infrastructure.llm.server", "app.infrastructure.llm.client",
-                            "app.tools.pdf_search", "app.services.questions", "app.app"):
+                            "app.tools.pdf_search", "app.services.questions", "app.app",
+                            "app.tools.database", "app.api.lifespan"):
             module = importlib.import_module(module_name)
             original = module.trace_step
 

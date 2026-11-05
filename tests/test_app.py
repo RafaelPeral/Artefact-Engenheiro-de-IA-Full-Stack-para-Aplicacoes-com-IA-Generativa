@@ -43,8 +43,9 @@ async def test_http_interface_accepts_service_without_initializing_model():
 def runtime(monkeypatch):
     initialize = MagicMock()
     generate = initialize.return_value.__enter__.return_value
-    generate.return_value = json.dumps({"question_type": "database"})
+    generate.return_value = json.dumps({"question_type": "greeting"})
     monkeypatch.setattr(lifecycle, "configure_logging", lambda: None)
+    monkeypatch.setattr(lifecycle, "create_database", MagicMock())
     monkeypatch.setattr(lifecycle, "initialize_llm", initialize)
     pdf = MagicMock()
     monkeypatch.setattr(lifecycle, "pdf_resources", pdf)
@@ -71,14 +72,14 @@ async def test_two_questions_reuse_one_llm(runtime):
                 )
                 assert response.status_code == 200
                 assert response.json() == {
-                    "answer": ANSWERS[QuestionType.DATABASE],
-                    "question_type": "database", "requires_lookup": True,
+                    "answer": ANSWERS[QuestionType.GREETING],
+                    "question_type": "greeting", "requires_lookup": False,
                 }
             runtime.initialize.assert_called_once()
             runtime.initialize.return_value.__exit__.assert_not_called()
             runtime.pdf.return_value.__enter__.assert_called_once()
             runtime.pdf.return_value.__exit__.assert_not_called()
-    assert runtime.generate.call_count == 2
+    assert runtime.generate.call_count == 1
     runtime.generate.assert_called_with(
         "Quais produtos vocês vendem?", CLASSIFICATION_PROMPT,
         response_format=CLASSIFICATION_SCHEMA,
@@ -142,7 +143,6 @@ async def test_initialization_failure_prevents_serving(runtime):
 
 
 @pytest.mark.parametrize("label, lookup", [
-    ("database", True),
     ("greeting", False), ("out_of_scope", False),
 ])
 async def test_routes_return_only_fixed_answers(client, runtime, label, lookup):
@@ -182,6 +182,8 @@ async def test_pdf_tool_result_is_used_for_final_answer(client, runtime, monkeyp
     evidence = {"source": "policies.pdf", "excerpts": [{"page": 2, "text": "09:00 às 18:00"}], "found": True}
     tool = MagicMock(return_value=evidence)
     monkeypatch.setattr(api.app.state.question_service, "_pdf_lookup", tool)
+    monkeypatch.setattr(api.app.state.question_service, "_database_lookup",
+                        MagicMock(return_value={"rows": [{"price_brl": 599.9}]}))
     runtime.generate.side_effect = [json.dumps({"question_type": label}), "Das 09:00 às 18:00 (página 2)."]
     response = await client.post("/questions", params={"question": "Qual o horário?"})
     assert response.status_code == 200
@@ -189,12 +191,14 @@ async def test_pdf_tool_result_is_used_for_final_answer(client, runtime, monkeyp
     assert body["answer"].startswith("Das 09:00 às 18:00 (página 2).")
     assert body["question_type"] == label
     assert body["requires_lookup"] is True
-    if label == "database_and_pdf":
-        assert ANSWERS[QuestionType.DATABASE] in body["answer"]
+
     tool.assert_called_once_with("Qual o horário?")
     prompt, system = runtime.generate.call_args.args
     assert json.loads(prompt)["pdf_tool_result"] == evidence
-    assert system == question_service.PDF_ANSWER_PROMPT
+    expected_prompt = (question_service.MIXED_ANSWER_PROMPT
+                       if label == "database_and_pdf"
+                       else question_service.PDF_ANSWER_PROMPT)
+    assert system == expected_prompt
     assert runtime.generate.call_count == 2
 
 
@@ -206,7 +210,7 @@ async def test_pdf_failure_returns_503_without_fabricating_answer(client, runtim
     assert runtime.generate.call_count == 1
 
 
-@pytest.mark.parametrize("label", ["database", "greeting", "out_of_scope"])
+@pytest.mark.parametrize("label", ["greeting", "out_of_scope"])
 async def test_other_routes_never_consult_pdf(client, runtime, monkeypatch, label):
     tool = MagicMock()
     monkeypatch.setattr(api.app.state.question_service, "_pdf_lookup", tool)
