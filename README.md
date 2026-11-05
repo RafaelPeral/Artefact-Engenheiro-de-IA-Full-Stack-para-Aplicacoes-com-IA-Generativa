@@ -439,6 +439,28 @@ source are not constrained to be unique. `order_items` uses the composite key
 orders/customers, items/orders/products, and promotions/products. Non-importer
 connections must enable SQLite foreign keys when performing writes.
 
+## Use of coding assistance tools
+
+I used ChatGPT through the editor extension to assist with implementation,
+debugging, refactoring, test creation, and documentation. I retained
+responsibility for technical and architectural decisions, including the
+choice of components, tool boundaries, data consistency requirements, and
+tradeoffs between response quality, latency, and local hardware limits.
+These decisions were not delegated to the coding assistant.
+
+The development instructions also required execution and latency tests:
+changes had to be checked through automated tests and, where relevant,
+actual local execution. Performance checks distinguish deterministic SQL
+and API tests with mocked inference from tests using the real local model.
+`make test` runs the default suite, `make test-live` enables actual-model
+timing tests, and `make benchmark` measures the execution stages. Passing
+mocked tests alone does not demonstrate model answer quality or real
+inference speed; local measurements do not establish production capacity.
+
+AI assistance supported the coding work; it did not replace critical review,
+verification against the supplied data and policies, or responsibility for
+the resulting implementation and its documented limitations.
+
 ## Sources
 
 - [Ollama Windows runtime](https://docs.ollama.com/windows)
