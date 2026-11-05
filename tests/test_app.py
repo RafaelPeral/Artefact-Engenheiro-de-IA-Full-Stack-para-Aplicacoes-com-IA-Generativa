@@ -143,7 +143,7 @@ async def test_initialization_failure_prevents_serving(runtime):
 
 
 @pytest.mark.parametrize("label, lookup", [
-    ("greeting", False), ("out_of_scope", False),
+    ("greeting", False), ("out_of_scope", False), ("accessory", False),
 ])
 async def test_routes_return_only_fixed_answers(client, runtime, label, lookup):
     runtime.generate.return_value = json.dumps({"question_type": label})
@@ -184,22 +184,26 @@ async def test_pdf_tool_result_is_used_for_final_answer(client, runtime, monkeyp
     monkeypatch.setattr(api.app.state.question_service, "_pdf_lookup", tool)
     monkeypatch.setattr(api.app.state.question_service, "_database_lookup",
                         MagicMock(return_value={"rows": [{"price_brl": 599.9}]}))
-    runtime.generate.side_effect = [json.dumps({"question_type": label}), "Das 09:00 às 18:00 (página 2)."]
+    runtime.generate.side_effect = [
+        json.dumps({"question_type": label}),
+        *(["Database result."] if label == "database_and_pdf" else []),
+        json.dumps({"answer": "Das 09:00 às 18:00 (página 2).", "source_pages": [2]}),
+    ]
     response = await client.post("/questions", params={"question": "Qual o horário?"})
     assert response.status_code == 200
     body = response.json()
-    assert body["answer"].startswith("Das 09:00 às 18:00 (página 2).")
+    assert "Das 09:00 às 18:00 (página 2)." in body["answer"]
     assert body["question_type"] == label
     assert body["requires_lookup"] is True
 
     tool.assert_called_once_with("Qual o horário?")
     prompt, system = runtime.generate.call_args.args
     assert json.loads(prompt)["pdf_tool_result"] == evidence
-    expected_prompt = (question_service.MIXED_ANSWER_PROMPT
-                       if label == "database_and_pdf"
-                       else question_service.PDF_ANSWER_PROMPT)
-    assert system == expected_prompt
-    assert runtime.generate.call_count == 2
+    expected_prompt = question_service.PDF_ANSWER_PROMPT
+    assert system.startswith(expected_prompt)
+    assert runtime.generate.call_args.kwargs["response_format"][
+        "properties"]["source_pages"]["items"]["enum"] == [2]
+    assert runtime.generate.call_count == (3 if label == "database_and_pdf" else 2)
 
 
 async def test_pdf_failure_returns_503_without_fabricating_answer(client, runtime, monkeypatch):

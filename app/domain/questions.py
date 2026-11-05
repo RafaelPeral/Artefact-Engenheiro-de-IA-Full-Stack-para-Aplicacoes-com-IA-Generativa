@@ -10,6 +10,14 @@ class QuestionType(str, Enum):
     DATABASE_AND_PDF = "database_and_pdf"
     GREETING = "greeting"
     OUT_OF_SCOPE = "out_of_scope"
+    ACCESSORY = "accessory"
+
+
+@dataclass(frozen=True)
+class QuestionIntent:
+    question_type: QuestionType
+    database_question: str | None = None
+    policy_question: str | None = None
 
 
 @dataclass(frozen=True)

@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 
 from app.services.classification import CLASSIFICATION_SCHEMA, CLASSIFICATION_PROMPT, QuestionType, classify_question
+from app.services.classification import classify_request
 
 
 @pytest.mark.parametrize("question, label", [
@@ -32,3 +33,25 @@ def test_classification_uses_a_separate_system_prompt(question, label):
 def test_invalid_labels_are_rejected(output):
     with pytest.raises(RuntimeError, match="invalid question type"):
         classify_question("Mensagem", Mock(return_value=output))
+
+
+def test_mixed_request_scopes_preserve_separate_questions():
+    model = Mock(return_value=json.dumps({
+        "question_type": "database_and_pdf",
+        "database_question": "Quanto custa a Kalani KAL-700T?",
+        "policy_question": "Quais são as regras de devolução?",
+    }))
+    intent = classify_request("Preço e devolução da Kalani?", model)
+    assert intent.question_type == QuestionType.DATABASE_AND_PDF
+    assert intent.database_question == "Quanto custa a Kalani KAL-700T?"
+    assert intent.policy_question == "Quais são as regras de devolução?"
+    model.assert_called_once()
+
+
+def test_scoped_question_cannot_drop_an_explicit_order_identifier():
+    model = Mock(return_value=json.dumps({
+        "question_type": "database", "database_question": "Quais pedidos saíram?",
+        "policy_question": None,
+    }))
+    with pytest.raises(RuntimeError, match="invalid question type"):
+        classify_request("Meu pedido 3 já saiu?", model)

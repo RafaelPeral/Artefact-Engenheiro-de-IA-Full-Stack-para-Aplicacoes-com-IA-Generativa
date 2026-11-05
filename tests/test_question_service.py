@@ -30,7 +30,11 @@ def test_fixed_response_requires_no_http_or_pdf_resources():
 
 
 def test_mixed_question_passes_both_tool_results():
-    model = Mock(side_effect=['{"question_type":"database_and_pdf"}', "Política (página 4)."])
+    model = Mock(side_effect=[
+        '{"question_type":"database_and_pdf"}',
+        "Database result.",
+        json.dumps({"answer": "Política (página 4).", "source_pages": [4]}),
+    ])
     evidence = {"excerpts": [{"page": 4, "text": "Regras de devolução"}]}
     tool = Mock(return_value=evidence)
     database = Mock(return_value={"rows": [{"price_brl": 599.9}]})
@@ -38,9 +42,11 @@ def test_mixed_question_passes_both_tool_results():
     tool.assert_called_once_with("Preço e devolução?")
     assert json.loads(model.call_args.args[0])["pdf_tool_result"] == evidence
     payload = json.loads(model.call_args.args[0])
-    assert payload["database_tool_result"] == database.return_value
+    database_payload = json.loads(model.call_args_list[-2].args[0])
+    assert database_payload["database_tool_result"] == database.return_value
+    assert "database_tool_result" not in payload
     database.assert_called_once()
-    assert "599.9" in model.call_args.args[0]
+    assert "599.9" in model.call_args_list[-2].args[0]
     assert result.requires_lookup
 
 
@@ -83,6 +89,10 @@ def test_invalid_plans_are_not_cached(monkeypatch):
     reason="Requires running Ollama and prepared llama3.2:3b weights",
 )
 @pytest.mark.parametrize("question, expected", [
+    ("Vocês vendem cordas?", QuestionType.ACCESSORY),
+    ("Vocês têm violão de sete cordas?", QuestionType.DATABASE),
+    ("Meu pedido 3 já foi enviado? Qual o código de rastreamento?",
+     QuestionType.DATABASE),
     ("Quanto custa a Kalani KAL-700T?", QuestionType.DATABASE),
     ("Quanto custa o Yamaha C40?", QuestionType.DATABASE),
     ("Posso devolver um produto comprado online?", QuestionType.PDF),

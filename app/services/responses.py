@@ -3,6 +3,12 @@
 from app.domain.questions import QuestionType
 
 ANSWERS = {
+    QuestionType.ACCESSORY: (
+        "A gente trabalha só com instrumentos musicais e não vende "
+        "acessórios avulsos, como cordas, cabos ou palhetas. "
+        "Para isso, procure uma loja de acessórios musicais. "
+        "Se estiver buscando um instrumento, posso te ajudar!"
+    ),
     QuestionType.GREETING: (
         "Oi! Sou o assistente virtual da Empório da Música. "
         "Como posso te ajudar com instrumentos, pedidos ou dúvidas sobre a loja?"
