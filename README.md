@@ -268,6 +268,16 @@ half-up cent rounding calculates the price before generation. No discount is
 stacked, and multiple active promotions require confirmation rather than an
 invented priority. Original order totals are preserved.
 
+The service persona is defined in `app/prompts/persona.md`, based on section 7
+of the store policy manual (pages 6–7). It is composed into all answer prompts
+and cached in memory, without a PDF lookup or an additional model call to
+determine behavior. Classification and database planning do not receive it.
+Fixed greetings and scope redirects use the same friendly, professional tone.
+The extra prompt tokens still have an inference cost. Policy changes require
+updating this file and restarting the application. Response-time targets are
+not enforced by a scheduler, and complaint registration/escalation tools are
+not implemented; the assistant must not claim those actions were completed.
+
 The LLM writes a concise answer; Python does not dump all columns or append a
 fixed receipt. A promotional quote must include original price, percentage,
 and payable price. Evidence checks allow one LLM correction request;
