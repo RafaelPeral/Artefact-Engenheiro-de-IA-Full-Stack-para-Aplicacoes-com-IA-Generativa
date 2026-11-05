@@ -1,309 +1,221 @@
 # Artefact AI Engineering Project
 
-## Technical decisions and assumptions
+## Design assumptions: workload data was not provided
 
-The requirements do not specify question volume, concurrent demand, the
-frequency of repeated questions, or a response-time target. I therefore chose
-a general-purpose approach, assuming a low volume of questions and no need
-for near-zero response latency. These are design assumptions rather than
-measured workload characteristics, and should be revisited with actual usage.
+The requirements do not specify expected request volume, peak concurrency,
+data growth, response-time targets, or the frequency and distribution of
+repeated questions. These missing inputs limit the basis for architectural
+choices. Every decision described below should be read in that context,
+not as an optimal design for a measured production workload.
 
-If a small set of questions accounts for a large share of requests, dedicated
-functionality would be more appropriate for those answers. Frequent questions
-such as "Quais os produtos vocês vendem?" or "Qual o horário de funcionamento?"
-could be answered deterministically from the product catalog or configured
-business information, without invoking an LLM for each response. This would
-reduce inference cost and latency while keeping answers tied to maintained
-data. The current implementation classifies intent, but does not yet provide
-these deterministic catalog or policy lookups.
+This implementation assumes a small store dataset and low concurrent demand,
+prioritizing local execution, modest hardware requirements, cost, and a clear
+separation between model interpretation, factual retrieval, and generation.
+These are working assumptions, not conclusions supported by usage metrics.
 
-Cost and the available hardware were the main drivers of the model choice.
-The project uses a compact, quantized `llama3.2:3b` model running locally to
-balance language capabilities with modest computational requirements and
-avoid per-request charges from a hosted model API. Local execution still
-incurs hardware and electricity costs, and its answer quality and performance
-need to be evaluated against the intended workload.
+Explicitly different workloads could change the entire design:
 
-Under the low-volume assumption, inference latency was given lower priority
-than cost and resource use. This does not establish that latency is
-unimportant to users: higher demand, stricter response-time targets, or a
-high rate of repeated questions would justify revisiting the architecture,
-including deterministic handlers, caching, and the inference infrastructure.
+| Workload evidence | Decisions that would need reconsideration |
+| --- | --- |
+| Very low data and request volumes | Whether an LLM, semantic index, and API service justify their complexity; direct queries and maintained FAQ responses may be sufficient |
+| Large datasets | Storage engine, indexes, query plans, pagination, retrieval/indexing strategy, and update processes |
+| High request volume or concurrency | Inference hosting, model size, batching, queues, worker isolation, resource scaling, and operational controls |
+| A few questions account for most requests | Dedicated handlers or maintained FAQ answers, intent/result caching with explicit invalidation, and reducing model calls for common questions |
+| Mostly unique questions or frequent data changes | The usefulness of caching, freshness guarantees, retrieval cost, and the balance between general generation and specialized flows |
 
-## Application structure
+Consequently, SQLite, local Ollama inference, serialized requests, semantic
+PDF retrieval, bounded interpretation caches, and the current tool workflow
+are provisional choices for this exercise. Reliable measurements could lead
+to replacing these components or simplifying the workflow, not merely tuning
+their parameters. No throughput, capacity, or production latency guarantee
+is implied by the local tests and small-sample benchmarks.
 
-The project uses a layered service architecture for a JSON API. HTTP handling,
-the question use case, domain types, and external integrations have separate
-modules; there is no server-rendered view layer.
+Before treating this as a production design, collect representative question
+logs, repeated-intent frequencies, request rates, concurrency peaks, data
+sizes/growth, update frequency, and latency/cost objectives. Reevaluate the
+following implementation decisions against that evidence.
+
+A local store-assistant API. The LLM chooses the information source and query
+arguments, tools retrieve factual evidence, and the LLM writes the final
+answer. SQL execution and price calculations are deterministic; model
+interpretation and wording are not.
+
+## Quick start
+
+After installing the prerequisites below, run from the repository root:
 
 ```text
-app/
-  app.py                       # FastAPI entry point and HTTP endpoint
-  api/
-    schemas.py                 # HTTP response contracts
-    dependencies.py            # Service dependency resolution
-    error_handlers.py          # Application errors -> HTTP responses
-    lifespan.py                # Resource composition and cleanup
-  domain/
-    questions.py               # Question categories and result dataclass
-    errors.py                  # Application errors without HTTP status codes
-  services/
-    questions.py               # Classification -> retrieval -> generation
-    classification.py          # Intent classification and output validation
-    responses.py               # Deterministic greetings/refusals/notices
-  tools/
-    pdf_search.py              # Semantic PDF retrieval tool
-  infrastructure/
-    llm/client.py              # Ollama generation client and model lifecycle
-    llm/server.py              # Owned Ollama process lifecycle
-    llm/preparation.py         # Explicit weight downloads
-    database/sqlite.py         # CSV-to-SQLite import
-  core/
-    tracing.py                 # Logging, timings and inference metrics
-  prompts/
-    assistant.md               # Default generation instructions
-    classification.md          # Intent classification instructions
-    pdf_answer.md              # Evidence-grounded PDF answer instructions
+make install
+make run
 ```
 
-`app.py` validates the query, obtains `QuestionService` through a FastAPI
-dependency, and serializes the result. It does not classify questions, query
-documents, construct model prompts, or manage inference concurrency.
-`QuestionService` owns that workflow and its inference lock; it returns a
-domain dataclass and translates provider failures into application errors.
-The API error handlers alone map these errors to HTTP status codes.
+Open **http://127.0.0.1:8000/docs**, expand **POST /questions**, click
+**Try it out**, type your question in the `question` box, and click **Execute**.
+No JSON request body is required. Press **Ctrl+C** in the server terminal to
+stop the API and release resources started by the project.
 
-Prompt text lives in UTF-8 Markdown resources and is loaded relative to the
-package, independently of the shell's working directory. Restart the API
-after editing a prompt because resources are cached for the process lifetime.
-JSON output schemas, retrieval prefixes, and deterministic response messages
-remain in their owning modules because they define program contracts or
-output data rather than system instructions. The public API entry point
-remains `app.app:app`; Python imports for internal modules follow the paths above.
+No virtual-environment activation, manual model commands, server commands,
+or runtime parameters are needed for the normal workflow. On subsequent
+sessions, use only `make run`. Run `make install` again when dependencies
+change or when repairing an incomplete setup.
 
-## Project initialization
+### Prerequisites: Windows
 
-Run all commands from the repository root, which contains `requirements.txt`,
-`Makefile`, and the `app` directory. Python 3.12 is the recommended version
-and the version used during development. Installation and model preparation
-require internet access; later inference uses the locally downloaded weights.
+- Python 3.10+ on PATH; Python 3.12 is the development/test version.
+- GNU Make on PATH. The development machine uses Chocolatey's GNU Make.
+- For NVIDIA acceleration, an appropriate current NVIDIA driver.
+- Internet access and enough free disk space for the runtime, dependencies,
+  both models, and temporary extraction. Model weights alone are about 2.6 GB;
+  the runtime and its extraction require additional space.
 
-### Operating system compatibility
+Check prerequisites once in PowerShell or the VS Code integrated terminal:
 
-| Component | Windows | Linux |
-| --- | --- | --- |
-| Makefile | Uses Windows PowerShell (`powershell.exe`) | Not supported by the current recipes |
-| Runtime installation script | Installs Windows x64 binaries | Not supported; install manually below |
-| Python application and model preparation | Supported by the implementation | Designed to work with Ollama on PATH |
-| Server startup/shutdown | Windows process handling | Unix process handling |
+```powershell
+python --version
+make --version
+```
 
-Windows installation checks and mocked lifecycle tests have been run.
-The Linux instructions follow Ollama's documentation but have not been
-validated end to end on a Linux machine. GPU acceleration also depends on
-the drivers and hardware supported by Ollama. macOS setup is not covered here.
+Then use `make install` followed by `make run`. Make no longer depends on
+PowerShell-specific aliases or execution-policy changes. It delegates tasks
+to Python and always uses the project's `.venv/Scripts/python.exe` afterward.
+The legacy `scripts/setup_ollama.ps1` entry point only delegates to the same
+portable installer; it is not part of the normal workflow.
 
-### Windows: step by step
+### Prerequisites: Linux
 
-1. Install Python 3.12 with Python on PATH and install GNU Make. Use PowerShell
-   in the repository root and verify the commands are available:
-
-   ```powershell
-   python --version
-   make --version
-   ```
-
-2. Create and activate an isolated Python environment:
-
-   ```powershell
-   python -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   ```
-
-3. Install the Python dependencies and Ollama runtime:
-
-   ```powershell
-   make install
-   ```
-
-   `make pip` and `make ollama` run these steps separately. The setup script
-   reuses an existing installation or extracts the standalone Windows archive
-   into `%LOCALAPPDATA%/Programs/Ollama`. It does not start a server, download
-   model weights, or create a login startup entry. The application finds that
-   installation even when it is absent from PATH.
-
-4. If you installed the Ollama desktop application separately, quit it from
-   the system tray before continuing so the project can own server shutdown.
-   Download the model once:
-
-   ```powershell
-   make model
-   ```
-
-   This step starts a temporary server, downloads approximately 2 GB for
-   `llama3.2:3b`, and stops the server it started. It performs no inference.
-   Existing servers are reused and left running. Weights stay on disk.
-
-5. Start the project:
-
-   ```powershell
-   make run
-   ```
-
-   This starts the FastAPI server at `http://127.0.0.1:8000`. Leave the
-   terminal open while sending questions. Press Ctrl+C to stop the API and
-   release its owned server and model resources.
-
-6. For later runs, activate the environment again and run `make run`.
-   Repeat model preparation only when you need another model or update.
-   To leave the environment after the application exits:
-
-   ```powershell
-   deactivate
-   ```
-
-### Linux: step by step
-
-Use Bash and the Python commands below rather than the Windows Makefile.
-The package installation example targets Ubuntu/Debian. Adapt package names
-and installation commands for other distributions.
-
-1. Install Python, virtual environment support, and download/extraction tools:
-
-   ```bash
-   sudo apt-get update
-   sudo apt-get install python3 python3-venv python3-pip curl zstd
-   python3 --version
-   ```
-
-   Python 3.12 is recommended. Ensure your distribution supplies a compatible
-   Python version before proceeding.
-
-2. From the repository root, create the Python environment and install the
-   project dependencies:
-
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   python -m pip install --upgrade pip
-   python -m pip install -r requirements.txt
-   ```
-
-3. Install the Ollama runtime manually so installation does not start or
-   enable a background service. For a new Linux x86_64 installation:
-
-   ```bash
-   uname -m
-   curl -fL https://ollama.com/download/ollama-linux-amd64.tar.zst \
-     -o /tmp/ollama-linux-amd64.tar.zst
-   sudo tar --zstd -xf /tmp/ollama-linux-amd64.tar.zst -C /usr
-   command -v ollama
-   ```
-
-   For ARM64 (`aarch64`), use `ollama-linux-arm64.tar.zst` in both the URL
-   and local archive path. These are the archives listed in the
-   [official Linux installation instructions](https://docs.ollama.com/linux).
-   Skip the instructions for creating a startup service: the project manages
-   its server. Ollama's automatic installer may configure a system service.
-   If Ollama was already installed, reuse it rather than extracting over an
-   active installation.
-
-4. If an Ollama systemd service was previously installed, stop it and disable
-   automatic startup before giving the project control of the server:
-
-   ```bash
-   sudo systemctl disable --now ollama.service
-   ```
-
-   Run this command only when that service exists and you want it disabled.
-   Also stop any manually started `ollama serve` process in its own terminal.
-   For NVIDIA acceleration, install the appropriate driver for your Linux
-   distribution and verify it using `nvidia-smi`.
-
-5. Download the model independently from application startup:
-
-   ```bash
-   python -c "from app.infrastructure.llm.preparation import prepare_model; prepare_model()"
-   ```
-
-   Preparation downloads weights without performing inference. The temporary
-   server is stopped afterward; a pre-existing server is left running.
-   Run this command and the application as the same user, without `sudo`,
-   so they use the same local model cache.
-
-6. Start the project:
-
-   ```bash
-   python -m uvicorn app.app:app --host 127.0.0.1 --port 8000
-   ```
-
-   Leave the API running while sending requests and stop it with Ctrl+C.
-   For later runs, activate `.venv` again and repeat this command; no download
-   is needed. Run `deactivate` after stopping the API.
-
-### Startup, shutdown, and troubleshooting
-
-Normal startup never downloads weights. A missing model produces an error
-asking for preparation: use `make model` on Windows or the preparation Python
-command above on Linux. Loading local weights into RAM/VRAM still takes time.
-
-`make run` prepares the complete serving state before the API accepts requests:
-it loads `llama3.2:3b`, extracts and embeds the policy PDF with
-`embeddinggemma`, and retains both models plus the in-memory PDF index for the
-whole process. This moves the expensive first PDF lookup to startup so ordinary
-requests do not repeatedly load model weights or rebuild the index. The choice
-fits the target GTX 1650: the measured models use roughly 3 GB of its 4 GB of
-VRAM when both are resident. It intentionally trades startup time and VRAM for
-lower, steadier request latency. A machine that cannot hold both models should
-use a smaller embedding or generation model; the application does not fall
-back to repeatedly unloading models.
-
-On graceful shutdown, the application clears the PDF index and explicitly
-unloads both models. The Ollama server itself is stopped only if the project
-started it. Ctrl+C therefore releases the memory held for this API run without
-terminating a server that was already running.
-
-Press Ctrl+C in the application's terminal to interrupt it and trigger
-cleanup. Only servers started by the project are stopped. A pre-existing
-Ollama server stays running; quit or stop it beforehand if you want the
-project to manage the full lifecycle. Forced process termination or power
-loss may bypass Python cleanup. Closing the Python environment with
-`deactivate` does not stop an independently running Ollama server.
-
-For a smaller model, prepare it explicitly and select the same name when
-calling `initialize_llm(model="llama3.2:1b")`:
+The automatic runtime installer supports Linux x86_64 and ARM64. For
+Ubuntu/Debian, install prerequisites once (adapt for other distributions):
 
 ```bash
-python -c "from app.infrastructure.llm.preparation import prepare_model; prepare_model('llama3.2:1b')"
+sudo apt-get update
+sudo apt-get install python3 python3-venv make tar zstd
 ```
+
+Use a supported Python version; 3.12 is recommended. Then, as your normal
+user in the repository root:
+
+```bash
+make install
+make run
+```
+
+Do not use `sudo make install`: dependencies belong in the project environment
+and model files in your user account. Make automatically bootstraps with
+`python3` on Linux and uses `.venv/bin/python` for project tasks.
+For another available interpreter, the optional override is
+`make PYTHON=python3.12 install` for creation of a new environment. An existing
+`.venv` is reused; this override does not upgrade its interpreter. No override
+is required for a standard setup.
+
+The standalone runtime is extracted under `~/.local` without creating a
+systemd service. Make adds its executable directory to child processes' PATH;
+no permanent PATH edit is needed. An existing Ollama installation is reused.
+If an existing system service owns Ollama, stop it through your service
+manager first when you want the project to own the complete server lifecycle.
+
+### Platform support and verification
+
+Windows x64 and Linux x64/ARM64 have automatic runtime installation paths.
+The same Make targets are available on both. Windows command dispatch and
+application behavior are checked locally; Linux command construction and
+installer behavior are checked with mocks, not an end-to-end Linux run.
+macOS runtime installation is not automated. A manually installed Ollama may
+be discoverable there, but macOS execution has not been validated.
+GPU support and actual speed depend on the runtime, drivers, and hardware.
+
+## What the commands execute, and why
+
+Each task prints its purpose and exact subprocess command before execution.
+Failures stop the sequence instead of continuing with incomplete setup.
+The Makefile is a small front end to `scripts/project.py`, whose bootstrap
+requires only the Python standard library.
+
+| Command | Actions and purpose |
+| --- | --- |
+| `make install` | Create/reuse `.venv`; install runtime and test dependencies; install/reuse Ollama; download missing generation and embedding weights |
+| `make run` | Use `.venv`; create/import SQLite; start/reuse Ollama; load generation weights; build the PDF semantic index; start the API |
+| `make test` | Run functional tests, coverage, offline speed checks, and show slow tests; no real inference by default |
+| `make test-live` | Include actual local-model latency checks; requires completed setup |
+| `make benchmark` | Measure full startup, request stages, and shutdown using actual models |
+| `make help` | Show the primary commands and optional repair tasks |
+
+`make install` installs `requirements-dev.txt`, which includes
+`requirements.txt`, so `make test` works without a second dependency command.
+Packages stay inside `.venv`; the globally installed Python only bootstraps
+and dispatches tasks. Environment activation is optional for IDE/manual work.
+
+### Installation lifecycle
+
+1. Create `.venv` if it does not already exist.
+2. Install Python packages for the API, tools, and tests.
+3. Reuse Ollama from PATH or its standard user location. Otherwise download
+   the official standalone archive and extract it into the user installation.
+   This avoids the desktop installer's automatic login/server behavior.
+4. Start a temporary Ollama server only if no server is already available.
+5. Check `llama3.2:3b` and `embeddinggemma` (or `PDF_EMBEDDING_MODEL`). Download
+   missing weights, skip installed ones, and show download/timing progress.
+6. Stop the temporary server started by setup. No API is launched and no
+   inference is performed. A server that existed beforehand is left running.
+
+Ollama's download API needs a running server: setup therefore uses a temporary
+one for preparation, not a persistent application service. The first install
+can take a while because it downloads packages, runtime libraries, and weights.
+Repeating setup skips installed runtime/model downloads, but does not force
+model or runtime upgrades. Installation failures can be retried with
+`make install`.
+
+### Application startup and shutdown
+
+Before accepting any request, the FastAPI lifespan:
+
+1. Runs `create_database()` from `app/infrastructure/database/sqlite.py`.
+   All six `data/*.csv` files are imported into `app/store.db` in one
+   transaction. Existing IDs are updated without duplicate rows. Records absent
+   from CSVs are retained; this is an upsert, not a destructive rebuild.
+2. Starts Ollama if needed, verifies the generation model, and loads it.
+3. Extracts the policy PDF and builds its in-memory semantic index using the
+   embedding model. Both models are retained during the API's lifetime.
+4. Exposes the API at `http://127.0.0.1:8000` when preparation succeeds.
+
+`make run` never installs packages or downloads missing weights. Missing files,
+invalid CSVs, or missing models abort startup; repair with `make install`.
+CSV edits take effect on the next startup; there is no CSV file watcher.
+Startup upserts overwrite matching database rows from those source files.
+Startup can still take time to load weights and embed PDF chunks. Trace logs
+show the current step and elapsed time.
+
+Graceful shutdown unloads the models, clears PDF caches, closes clients, and
+stops only the Ollama process started by the project. A pre-existing server
+is never terminated, although model residency is shared and the application
+requests model unload on exit. Quit a separately installed Ollama tray app
+first if you want the project to own server shutdown. Forced termination or
+power loss may bypass Python cleanup. Weights and database files remain on disk.
+
+### Optional repair commands
+
+These split setup for troubleshooting; none is needed after a successful
+`make install`:
+
+| Command | Scope |
+| --- | --- |
+| `make pip` | Create/reuse `.venv` and install Python runtime/test packages |
+| `make ollama` | Install/reuse the runtime only; no server or model loading |
+| `make models` | Prepare both required model weights using a temporary server |
+| `make model` | Prepare only `llama3.2:3b` |
+| `make embeddings` | Prepare only the configured embedding model |
+
+The compatibility command `make test LIVE=1` is equivalent to `make test-live`.
+Prefer the named target; no parameter is needed.
 
 ## Question API
 
-The API exposes one question endpoint: `POST /questions`. It uses the existing
-local LLM to classify the supplied question. PDF-related questions invoke
-the policy lookup tool, then the LLM generates an answer from the retrieved
-evidence. SQL lookups are not implemented yet. Swagger is available at
-`http://127.0.0.1:8000/docs`.
-Expand `POST /questions`, click **Try it out**, enter text in the required
-`question` parameter box, and click **Execute**. No JSON request body is needed.
-The OpenAPI schema is available at `/openapi.json`.
+The only business endpoint is **POST /questions** with a required `question`
+query parameter. Swagger is at `/docs`; the schema is at `/openapi.json`.
 
-Update your Python environment after pulling these API changes:
+Example from another PowerShell terminal:
 
 ```powershell
-python -m pip install -r requirements.txt
-```
-
-Prepare weights with `make model` on Windows or the preparation command
-above on Linux, then start the API with `make run` (Windows) or:
-
-```bash
-python -m uvicorn app.app:app --host 127.0.0.1 --port 8000
-```
-
-Send a question from another PowerShell terminal:
-
-```powershell
-$question = [Uri]::EscapeDataString("Quais produtos vocês vendem?")
+$question = [Uri]::EscapeDataString("How much is the Kalani KAL-700T Tenor Natural?")
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/questions?question=$question"
 ```
 
@@ -311,380 +223,218 @@ On Linux:
 
 ```bash
 curl -X POST -G http://127.0.0.1:8000/questions \
-  --data-urlencode 'question=Quais produtos vocês vendem?'
+  --data-urlencode 'question=How much is the Kalani KAL-700T Tenor Natural?'
 ```
 
-Successful responses contain a fixed `answer`, the `question_type`, and
-`requires_lookup`. For example:
+The JSON response contains `answer`, `question_type`, and `requires_lookup`.
+The latter indicates the required source, not a pending implementation.
 
-```json
-{
-  "answer": "Esta pergunta necessita de consulta ao banco de dados da Empório da Música. Essa consulta ainda não está implementada.",
-  "question_type": "database",
-  "requires_lookup": true
-}
-```
-
-| Question type | Intended source or response |
+| Question type | Behavior |
 | --- | --- |
-| `database` | Catalog, prices, stock, promotions, customers and orders |
-| `pdf` | Store policies and institutional information, including opening hours |
-| `database_and_pdf` | Questions requiring both sources |
-| `greeting` | Fixed greeting introducing the store assistant |
-| `out_of_scope` | Fixed refusal for subjects outside the store context |
+| `database` | Validated SQL tool, then LLM answer from returned facts |
+| `pdf` | Semantic policy retrieval, then LLM answer with supporting pages |
+| `database_and_pdf` | Both tools, then a response addressing both parts |
+| `greeting` | Fixed store greeting |
+| `out_of_scope` | Fixed refusal for unrelated subjects |
 
-Out-of-scope questions receive: "Não sei responder, pois meus conhecimentos
-se limitam aos assuntos da Empório da Música." Greetings and out-of-scope
-messages have `requires_lookup: false`. This field describes the question's
-source requirements, not whether retrieval is still pending. Database-only
-questions return a pending lookup notice. PDF questions receive a generated
-answer grounded in retrieved excerpts; mixed questions also explicitly state
-that database access is not implemented. The model first classifies intent,
-including greetings and unrelated questions. Its classification
-output is constrained through Ollama's `format` JSON Schema to an object
-containing `question_type` with one of the allowed labels. The application
-also validates the returned JSON; invalid output returns HTTP 502
-instead of being presented as an answer. Classification is model-based and
-may be incorrect; mocked tests verify the contract, not semantic accuracy.
+Missing/blank questions return 422. Unavailable database/PDF/model services
+return 503; model timeouts return 504; invalid model plans and other inference
+failures return 502. Startup errors prevent serving entirely. Inference and
+lookups are serialized to respect the target machine's memory budget; use one
+Uvicorn worker. Answers are independent; conversation history is not stored.
 
-### PDF lookup tool
+## Tools and answer guarantees
 
-`app/tools/pdf_search.py` provides the internal `consult_pdf(question)` tool. The
-application invokes it for `pdf` and `database_and_pdf` classifications;
-users keep calling only `POST /questions`. No separate tool endpoint is
-exposed, and the model does not decide whether to skip the required lookup.
+### Database
 
-The tool implements a small local RAG pipeline: `pypdf` extracts text from
-`data/políticas_da_loja.pdf`, pages are split into overlapping excerpts,
-and Ollama generates embeddings using `embeddinggemma`. Query embeddings
-are compared with document embeddings by cosine similarity. There are no
-keyword rules or synonym dictionaries in retrieval. Up to three excerpts
-of 900 characters each are returned, with page numbers and similarity scores.
-For this small document, the vector index lives in memory; no vector database
-or additional embedding framework is needed. The index is reused until the
-PDF's path, modification time, size, or configured embedding model changes.
+The LLM chooses an entity, operation, and filters using a JSON schema.
+Application-owned allowlists compile the plan into parameterized SQL. Raw
+model-authored SQL is never executed. Each request uses a closed-after-use,
+read-only connection with an execution budget. Query values are bound parameters.
 
-Prepare the separate embedding model once, before asking PDF questions:
+Supported data includes products/categories, customers, orders/items, and
+promotions. Operations include listing, a focused price lookup, catalog
+category overview, count, sum, average, minimum, and maximum over allowed
+columns. Lists default to five rows, at most ten. Overviews cover populated
+categories independently of product sampling, capped at 100 category rows
+with explicit truncation and global totals. Defined categories without products
+are excluded. Arbitrary joins/grouping and historical unit-price calculations
+are unsupported; the CSVs do not contain historical per-item prices.
 
-```powershell
-make embeddings
-```
+Product price lookups return original price, active discount, effective price,
+and enough status/stock data to identify ambiguity or unavailability. Only
+promotions with `is_active=1` affect the current price. Decimal arithmetic with
+half-up cent rounding calculates the price before generation. No discount is
+stacked, and multiple active promotions require confirmation rather than an
+invented priority. Original order totals are preserved.
 
-On Linux, use:
+The LLM writes a concise answer; Python does not dump all columns or append a
+fixed receipt. A promotional quote must include original price, percentage,
+and payable price. Evidence checks allow one LLM correction request;
+if the second draft still omits required values, it is not published. This
+checks disclosure presence, explicit currency amounts against tool evidence,
+and a citation to a retrieved PDF page. It does not establish semantic
+entailment of every claim. Mixed questions use a separate prompt to preserve
+both the database and policy parts, even if one tool finds nothing. Invalid
+database plans get one validation-feedback retry before execution; omitted
+name operators default to partial matching and identifier filters must be
+positive integers. For example, an answer
+can naturally say that a product originally priced at BRL 359.00 is now
+BRL 323.10 with 10% off.
 
-```bash
-python -c "from app.infrastructure.llm.preparation import prepare_model; prepare_model('embeddinggemma')"
-```
+SQL facts are deterministic for the same plan and database snapshot.
+Classification, plan selection, and final prose remain model-based. Adding
+punctuation may cause a new interpretation; no claim of paraphrase invariance
+or complete end-to-end determinism is made.
 
-The index is built during application startup; later PDF questions embed only
-the query. Both models remain resident until graceful application shutdown.
-Both services use the application's local Ollama server; retrieval never
-downloads weights implicitly. A missing embedding model is reported at startup
-with instructions to run `make embeddings`.
+Classification and validated plans have per-service LRU caches of 128 exact
+stripped questions. Rows, stock, prices, and final answers are never cached.
+Every repeated question executes fresh SQL and generates a new answer.
+Failed interpretations are not cached; restarting clears the caches.
 
-`PDF_EMBEDDING_MODEL` selects another compatible embedding model. Query and
-document prefixes follow EmbeddingGemma's retrieval format; changing to an
-unrelated model may require adapting these prefixes. `PDF_MIN_SIMILARITY`
-sets the minimum cosine score (default `0.3`, range `-1` to `1`). This is a
-heuristic checked against a few return-policy paraphrases, not a calibrated
-confidence or probability; tune it against
-representative store questions. Retrieval can still return incomplete or
-irrelevant evidence. References: [Ollama embeddings](https://docs.ollama.com/capabilities/embeddings)
-and [EmbeddingGemma](https://ollama.com/library/embeddinggemma).
+### Policy PDF
 
-The tool result and original question are passed to a second LLM call with
-instructions to use only that evidence, cite supporting pages, and say when
-the information was not found. These instructions reduce unsupported answers
-but do not guarantee model accuracy. Missing or unreadable PDFs return HTTP
-503; scanned documents need OCR, which is not implemented. The tool emits
-`tool.consult_pdf` stage logs. Install updated requirements and restart the API
-before testing, for example with `Qual o horário de funcionamento?` in Swagger.
+`app/tools/pdf_search.py` extracts page-labelled chunks from the policy PDF,
+embeds them with `embeddinggemma`, and retrieves up to three excerpts using
+cosine similarity. Query/document prefixes follow EmbeddingGemma's format.
+The index is prepared at startup, retained in memory, and invalidated when
+file metadata or the configured embedding model changes.
 
-Mixed questions are answered in parts: retrieved return policies can be
-explained even when the product price is unavailable. General rules do not
-establish that a specific product or purchase is eligible for a return.
+The LLM receives retrieved evidence and cites supporting pages. Similarity
+thresholds are heuristics, not probabilities; retrieval and generation may
+still be incomplete or wrong. Scanned documents need OCR, which is not
+implemented. General return rules do not establish eligibility of a specific
+product/order without evidence.
 
-At `INFO` level, diagnostic logs include `TOOL_INPUT consult_pdf` (question),
-`TOOL_OUTPUT consult_pdf` (full retrieved excerpts, pages, similarity scores,
-embedding model and threshold), `LLM_OUTPUT`
-(raw model output, with `structured` or `text` mode), and `API_ANSWER` (final
-response). Payloads are JSON-encoded so multiline content stays on one log
-line. `TRACE_LOG_FILE` retains these logs using the existing logging setup.
+## Tracing and diagnostics
 
-Missing or blank questions return HTTP 422. Query parameters are strings. An unavailable local
-model server returns 503; inference timeouts return 504; other model failures
-return 502. Startup fails if initialization cannot load the prepared model.
+Console logs show `START`, `WAIT`, `DONE`, and `FAIL` with timestamps and elapsed
+seconds. Long operations emit `WAIT` every five seconds. Logs identify startup,
+classification, database planning/execution, PDF retrieval, generation, and
+cleanup. `DATABASE_RESULT` distinguishes sampled rows from matching catalog
+totals. Cache-hit flags show which interpretation calls were reused.
 
-The FastAPI lifespan initializes the LLM once and releases its owned
-resources when the API shuts down. Use a single Uvicorn worker for this
-machine. Questions are handled one at a time to limit inference memory use;
-blocking inference runs in FastAPI's thread pool. Existing stage tracing and
-inference metrics remain enabled, with `api.question` timing each request.
+Ollama metrics report load time, prompt evaluation, generation time, token
+counts, and throughput. Nested stage times are inclusive; do not add parent
+and child durations. `WAIT` shows a pending operation, not percentage progress.
+At INFO level, question/tool/model payloads and final answers are also logged.
+`TRACE_LOG_FILE` optionally appends logs to a file; `LOG_LEVEL=WARNING` hides
+progress. Configuration is optional, not required for normal commands.
 
-## Application lifecycle
+If startup fails, read the first failed stage. SQLite errors usually concern
+CSV/path/constraint problems; model errors usually require completed setup;
+Ollama process errors include the temporary server log's path. Do not interpret
+a connection failure as proof of insufficient VRAM.
 
-### Execution tracing and performance
-
-`make run` and the Uvicorn command above enable timestamped console logs.
-Importing `app.app` defines the API without loading the LLM. Launch the API
-through Uvicorn rather than running `app/app.py` directly.
-`make model` also enables tracing during preparation. Logs appear immediately
-on standard error; generated answers continue to use standard output.
-No additional logging dependency is required.
-
-Each instrumented stage emits `START`, then `DONE` with elapsed seconds or
-`FAIL` with the traceback. Blocking stages emit `WAIT` every five seconds,
-so you can identify the active operation before it finishes. Example format
-(illustrative timings):
+## Tests, coverage, and speed
 
 ```text
-2026-11-03 12:00:00.000 | INFO | START llm.load
-2026-11-03 12:00:05.000 | INFO | WAIT llm.load | elapsed=5.000s
-2026-11-03 12:00:07.200 | INFO | DONE llm.load | elapsed=7.200s
+make test
+make test-live
+make benchmark
 ```
 
-| Stage | What it measures |
+`make test` runs pytest, branch coverage, an HTML report at `htmlcov/index.html`,
+offline speed tests, and a list of slow tests. Ollama and embeddings are mocked
+by default; real SQLite files and PDF extraction are exercised using test
+resources. Temporary databases do not modify `app/store.db`. Tests use a fresh
+local temporary directory under `.pytest_cache/` and clean it afterward.
+Use the generated report for current coverage; fixed test counts/percentages
+in older notes are not maintained as guarantees.
+
+Default performance checks measure 20 SQL and ASGI samples with mocked
+inference, verify interpretation-call reuse, and verify that a changed
+promotion affects the next answer. These timings are not real-model SLAs.
+`make test-live` adds actual Ollama timing, model-call checks, and fresh answer
+generation on every repetition. It needs the generation weights from setup,
+does not download anything, and excludes initial model loading from timed
+questions. Small sample counts are not throughput or p95 guarantees.
+
+`make benchmark` exercises full API startup, PDF indexing, sequential requests,
+and shutdown with actual models. It records stage timings, responses, Ollama
+metrics, and available GPU snapshots. Older measurements from the removed
+static-response formatter do not describe the current LLM-formatted path.
+
+| Artifact | Source |
 | --- | --- |
-| api.question | HTTP question processing, including the inference queue |
-| server.startup | API check, optional process launch, and readiness wait |
-| llm.check_model | Verify local model availability |
-| llm.load | Initial model load request |
-| llm.generate | Response generation request and response processing |
-| llm.unload | Release the model on an owned server |
-| llm.client_close | Close HTTP client resources |
-| server.shutdown | Stop and wait for the owned server process |
-| model.download | Stream model preparation/download |
+| `htmlcov/index.html` | Current pytest coverage |
+| `reports/performance/test-speed.json` | Default offline timing tests |
+| `reports/performance/test-speed-live.json` | Opt-in actual-model timing tests |
+| `reports/performance/latest.json` | Full pipeline benchmark |
 
-`METRICS llm.generate` reports Ollama's total duration, model loading time,
-prompt evaluation time, output generation time, output token count, and
-tokens per second, when available. These server-side durations are converted
-from nanoseconds to seconds; tokens per second uses output generation time.
-See the [Ollama response fields](https://docs.ollama.com/api/chat).
+Reports, `.venv`, caches, logs, and generated SQLite files are ignored by Git.
 
-Elapsed stage times use a monotonic performance clock and include waiting
-and request overhead. Stages can be nested: do not add application time to
-its child timings. `WAIT` means the operation has not returned; it does not
-indicate the model's internal percentage of completion. Compare repeated
-runs and separate initial model loading from generation when optimizing.
+## Configuration and hardware
 
-### Local performance benchmark
+Defaults need no parameters. Advanced optional settings:
 
-Run `make benchmark` to exercise startup, SQLite import, PDF extraction,
-semantic indexing, classification, PDF retrieval, final generation, and
-shutdown through the same ASGI application used by the API. It writes a JSON
-report to `reports/performance/latest.json`; generated reports are ignored by
-Git. The benchmark sends sequential local requests, so it measures application
-latency rather than throughput, concurrency, network transit, or p95 latency.
+| Setting | Effect |
+| --- | --- |
+| `PDF_EMBEDDING_MODEL` | Embedding weights prepared by install and used for PDF retrieval |
+| `PDF_MIN_SIMILARITY` | Cosine threshold, default 0.3; range -1 to 1 |
+| `STORE_DATABASE_PATH` | SQLite destination for both startup import and lookups; parent must exist |
+| `TRACE_LOG_FILE` | Append diagnostic logs to this path |
+| `LOG_LEVEL` | Log verbosity, default INFO |
+| `PERF_SQL_MEDIAN_SECONDS` | Offline SQL timing budget, default 0.25 s |
+| `PERF_API_MEDIAN_SECONDS` | Mocked-inference ASGI timing budget, default 0.5 s |
+| `PERF_LIVE_COLD_SECONDS` | First live-question budget, default 30 s |
 
-The report records wall-clock time for each stage and the duration fields
-returned by Ollama, including model load time, prompt evaluation time, output
-generation time, and token counts. Nested stages are inclusive and should not
-be added together. It also captures `ollama ps` and GPU snapshots before and
-after the run to make model residency visible.
+A compatible model alone is not enough when changing `PDF_EMBEDDING_MODEL`:
+retrieval prefixes may also need adaptation. Re-run `make models` after changing
+that setting, then restart. A persistent `.env` loader is not implemented;
+settings must be present in the environment of the Make process.
 
-During the initial investigation, retaining models for the API process reduced
-repeated greeting/classification requests from roughly 6 seconds to less than
-0.3 seconds on the target machine. Repeated PDF requests fell from roughly
-20 seconds to roughly 3 seconds after the index and models were warm. These
-are local, small-sample observations rather than service-level guarantees; use
-the benchmark after changes to compare the same machine and model versions.
+The development target is a GTX 1650 (4 GB VRAM) with 16 GB system RAM.
+The approximately 2 GB quantized Llama 3.2 3B supports Portuguese; the embedding
+model is about 622 MB. Context cache and runtime overhead also consume memory.
+The default 2,048-token generation context and 256-token output budget are a
+starting point, not a guarantee that both models always fit entirely on GPU.
+Ollama chooses GPU/CPU placement; integrated Intel graphics memory does not
+add to NVIDIA VRAM. Llama 3.3 70B's roughly 43 GB quantized weights are unsuitable
+for this machine. Local inference needs no paid API, but still consumes local
+resources and is subject to model licenses.
 
-To retain logs across runs, set `TRACE_LOG_FILE`:
+## Architecture and limits
 
-```powershell
-$env:TRACE_LOG_FILE = "logs/execution.log"
-make run
+```text
+app/app.py                         HTTP endpoint
+app/api/                           HTTP schemas, DI, errors, startup/shutdown
+app/services/questions.py          Classification -> tools -> answer workflow
+app/services/answer_generation.py  LLM wording and promotion disclosure checks
+app/services/classification.py     Model-based intent classification
+app/services/responses.py          Fixed greetings/refusals
+app/tools/database.py              Read-only validated database plans
+app/tools/pdf_search.py            Semantic PDF evidence
+app/infrastructure/database/       Transactional CSV importer
+app/infrastructure/llm/            Model, server, and preparation lifecycle
+app/prompts/                       Versioned UTF-8 system prompts
+app/core/tracing.py                Timings and diagnostics
+scripts/project.py                 Portable Make task dispatcher and bootstrap
+scripts/prepare_models.py          Required model checks/download orchestration
 ```
 
-On Linux:
+The use case is independent of FastAPI. HTTP code validates/delegates and maps
+application errors to statuses. Prompts are loaded relative to the package and
+cached; restart after changing them. A low-volume local assistant is assumed:
+there is no calibrated capacity target, authentication layer, distributed
+cache, or multi-user conversation state. Stronger latency or concurrency
+requirements would require reevaluating the inference/service design rather
+than silently substituting fixed row listings for conversational answers.
 
-```bash
-TRACE_LOG_FILE=logs/execution.log python -m uvicorn app.app:app --host 127.0.0.1 --port 8000
-```
+The standalone SQLite importer also accepts custom CSV/database paths. It
+validates required fields, ISO dates, JSON specs, ranges, and relationships.
+Empty optional fields become NULL; phones remain text; repeated emails in the
+source are not constrained to be unique. `order_items` uses the composite key
+`(order_id, product_id)`. Foreign keys connect products/categories,
+orders/customers, items/orders/products, and promotions/products. Non-importer
+connections must enable SQLite foreign keys when performing writes.
 
-Log files are appended and `*.log` is already ignored by Git. Set `LOG_LEVEL`
-to `WARNING` to hide stage progress. To enable tracing when importing project
-functions elsewhere, call `configure_logging()` once at your entry point.
-Additional operations can use the same timer:
+## Sources
 
-```python
-from app.core.tracing import configure_logging, trace_step
-
-configure_logging()
-with trace_step("database.import"):
-    counts = create_database()
-```
-
-### Resource ownership
-
-The application owns startup and shutdown through a context manager:
-
-```python
-from app.infrastructure.llm.client import initialize_llm
-
-with initialize_llm() as generate_response:
-    reply = generate_response("Hello!")
-    print(reply)
-```
-
-Initialization starts a background server if needed, waits up to 30 seconds
-for readiness, verifies the model exists, and loads it from disk for inference.
-It never downloads weights. A missing model raises an error asking you to run
-`make model`. Loading weights into RAM/VRAM still takes time at startup, but
-network download time is confined to the preparation step.
-
-Leaving the `with` block unloads the model, stops the server started by the
-project, and closes the client. Cleanup also runs on startup failures,
-application exceptions, and normal Ctrl+C interruption. A pre-existing server
-is reused and never terminated; requests to that shared server use zero
-keep-alive so they do not leave the model loaded. Forced process termination
-or power loss can bypass Python cleanup. To let the project control the full
-server lifecycle, quit the Ollama tray application before running it.
-
-The default `llama3.2:3b` model uses Q4_K_M quantization, is approximately 2 GB,
-and supports Portuguese. A 2,048-token context and 256-token output budget
-are a starting point for the GTX 1650 (4 GB VRAM) and 16 GB system RAM.
-Runtime memory includes context and inference overhead; measure GPU placement
-and speed on the target machine. Intel integrated graphics memory does not
-add to NVIDIA VRAM. If necessary, use `initialize_llm(model="llama3.2:1b")`.
-Llama 3.3 70B's approximately 43 GB quantized download is unsuitable here.
-Local inference needs no paid API; Meta's community license applies.
-
-Importing `app.infrastructure.llm.client` has no startup side effects. Responses are
-independent; conversation history is not stored. A custom system prompt can
-be supplied as the response function's second argument. Server launch logs
-are written to `artefact-ollama-server.log` in the system temporary directory.
-Intent routing, semantic embeddings and PDF retrieval are implemented;
-SQL access is not yet wired.
-
-Validation uses pytest; see the testing and coverage section below.
-Ollama services and downloads are mocked, and SQLite uses temporary files.
-
-Sources: [model](https://ollama.com/library/llama3.2:3b),
-[languages](https://ollama.com/library/llama3.2),
-[standalone Windows runtime](https://docs.ollama.com/windows), and
-[Python client](https://github.com/ollama/ollama-python).
-
-## SQLite import
-
-Use the single public function from Python 3.9 or later. No external
-packages are required. Importing the module performs no database operations.
-
-```python
-from app.infrastructure.database.sqlite import create_database
-
-counts = create_database()
-```
-
-By default, CSVs are read from the project-root `data` directory and the
-database is created at `app/store.db`. You can supply both paths:
-
-```python
-counts = create_database(
-    data_dir="path/to/csvs",
-    database_path="path/to/store.db",
-)
-```
-
-The destination directory must exist. If only `data_dir` is supplied, the
-database still defaults to `app/store.db`, independently of `data_dir`. The return value maps
-each table name to its imported row count. Errors propagate to the caller.
-
-| Table | Primary key | Foreign keys |
-| --- | --- | --- |
-| categories | category_id | None |
-| customers | customer_id | None |
-| products | product_id | category_id references categories |
-| orders | order_id | customer_id references customers |
-| order_items | (order_id, product_id) | order_id references orders; product_id references products |
-| promotions | promotion_id | product_id references products |
-
-The composite key in `order_items` allows one row per product in each order;
-`quantity` records how many units were purchased.
-
-The function validates ISO dates, JSON specifications, quantities, discounts,
-and references. Empty optional fields become `NULL`. Phone numbers remain
-text. Emails are not unique because the source contains a repeated address.
-Source CSV contents are preserved in their original language.
-
-Repeated calls update matching keys without duplicating rows. Rows absent
-from the CSVs remain in the database. Any failure rolls back the transaction,
-and the connection is always closed. Other connections must also enable
-`PRAGMA foreign_keys = ON` to enforce foreign keys.
-
-Monetary columns preserve the CSV names and amounts in Brazilian reais with
-`NUMERIC` affinity. SQLite may store fractional values as floating point;
-use integer cents if exact financial calculations are required. Order totals
-are preserved because the CSVs do not provide historical item prices.
-
-
-## Testing and coverage
-
-Install development dependencies inside the active virtual environment:
-
-```bash
-python -m pip install -r requirements-dev.txt
-python -m pytest
-```
-
-On Windows, `make test` runs the same suite. `pytest.ini` enables branch
-coverage and reports uncovered lines in the terminal. It also generates
-`htmlcov/index.html`, which can be opened in a browser to inspect individual
-lines and branches. Coverage artifacts are ignored by Git.
-
-Tests use a fresh temporary directory inside `.pytest_cache/` for each run
-and remove it on exit. This avoids permission errors in shared Windows
-`Temp/pytest-of-*` directories. An explicit `--basetemp` overrides this default.
-
-The test suite uses pytest fixtures, parametrization, and pytest-asyncio for
-the ASGI interface. Each functional application module has its own tests:
-
-| Application module | Test module | Latest combined line/branch coverage |
-| --- | --- | --- |
-| app/app.py | tests/test_app.py | 100% |
-| app/api/ | tests/test_app.py | 100% |
-| app/services/questions.py | tests/test_question_service.py, tests/test_app.py | 100% |
-| app/services/classification.py | tests/test_question_routing.py | 100% |
-| app/tools/pdf_search.py | tests/test_pdf_tool.py | 92% |
-| app/infrastructure/llm/client.py | tests/test_initialize_llm.py | 100% |
-| app/infrastructure/llm/server.py | tests/test_ollama_server.py | 99% |
-| app/infrastructure/llm/preparation.py | tests/test_prepare_model.py | 100% |
-| app/core/tracing.py | tests/test_tracing.py | 99% |
-| app/infrastructure/database/sqlite.py | tests/test_sqlite_creation.py | 98% |
-
-The latest default Windows run passed 140 tests, with 3 opt-in checks skipped,
-and 98% overall combined line/branch
-coverage, compared with the original 21 tests and 62%.
-The three opt-in semantic retrieval checks also passed against the real
-`embeddinggemma` model and policy PDF: the mixed Yamaha C40 question and
-Portuguese/English paraphrases of changing one's mind about an online purchase.
-These checks validate retrieval, not the final generation model's accuracy.
-
-The default test suite never starts real Ollama processes, downloads weights,
-or runs inference. PDF extraction uses the real document, while semantic
-ranking and API tests use controlled embedding/model responses. To evaluate
-paraphrases against the real embedding model, start Ollama, prepare
-`embeddinggemma`, and run the opt-in checks:
-
-```powershell
-$env:RUN_OLLAMA_RAG_TESTS = "1"
-python -m pytest tests/test_pdf_tool.py -k live_semantic --no-cov -v
-Remove-Item Env:RUN_OLLAMA_RAG_TESTS
-```
-
-Server launch options for Windows and Unix are checked through mocks; this
-does not validate GPU drivers, actual model speed, or Linux execution.
-SQLite tests import copies of the real CSV fixtures into temporary databases
-and verify keys, constraints, updates, repeated imports, and transaction
-rollback. They do not write to the project's `app/store.db`.
-
-For a focused run (the coverage report still includes all application modules):
-
-```bash
-python -m pytest tests/test_sqlite_creation.py -v
-```
-
-Remaining uncovered paths include defensive checks. Coverage measures
-executed code, not answer quality or
-production reliability. References: [pytest fixtures](https://docs.pytest.org/en/stable/how-to/fixtures.html)
-and [coverage reporting](https://pytest-cov.readthedocs.io/en/latest/reporting.html).
+- [Ollama Windows runtime](https://docs.ollama.com/windows)
+- [Ollama Linux manual installation](https://docs.ollama.com/linux)
+- [Llama 3.2 model](https://ollama.com/library/llama3.2:3b)
+- [EmbeddingGemma model](https://ollama.com/library/embeddinggemma)
+- [Ollama Python client](https://github.com/ollama/ollama-python)
+- [FastAPI lifespan](https://fastapi.tiangolo.com/advanced/events/)
+- [pytest coverage reports](https://pytest-cov.readthedocs.io/en/latest/reporting.html)
