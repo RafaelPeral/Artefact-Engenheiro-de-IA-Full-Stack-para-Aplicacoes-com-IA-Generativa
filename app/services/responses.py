@@ -4,12 +4,12 @@ from app.domain.questions import QuestionType
 
 ANSWERS = {
     QuestionType.GREETING: (
-        "Olá! Sou o assistente da Empório da Música. "
-        "Posso ajudar com produtos, pedidos e informações sobre a loja."
+        "Oi! Sou o assistente virtual da Empório da Música. "
+        "Como posso te ajudar com instrumentos, pedidos ou dúvidas sobre a loja?"
     ),
     QuestionType.OUT_OF_SCOPE: (
-        "Não sei responder, pois meus conhecimentos se limitam "
-        "aos assuntos da Empório da Música."
+        "Essa dúvida fica fora do que posso te ajudar por aqui. "
+        "Posso ajudar com instrumentos musicais, pedidos e informações "
+        "sobre a Empório da Música."
     ),
-
 }
