@@ -18,6 +18,11 @@ rows. If truncated=true, label lists as partial; never sum a partial list.
 count=0 means no matching records; aggregate null is unknown, not zero.
 Empty rows mean no matches. supported=false means ask for a simpler question.
 Do not infer historical unit prices from current catalog prices.
+For order questions, translate the supplied status precisely: delivered
+means already delivered, shipped means dispatched, pending means pending,
+confirmed means confirmed, cancelled means cancelled. Quote the exact supplied
+tracking code, never invent carrier events. Do not confuse delivered with
+merely shipped. Do not add return policy to a tracking question.
 
 For policy evidence cite supporting pages as (page N). For mixed questions
 answer each part separately. General return rules do not establish eligibility

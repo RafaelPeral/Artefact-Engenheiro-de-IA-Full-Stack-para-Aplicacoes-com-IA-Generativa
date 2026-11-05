@@ -14,7 +14,7 @@ from app.domain.errors import (
 )
 from app.domain.questions import QuestionResult, QuestionType
 from app.prompts import load_prompt
-from app.services.classification import classify_question
+from app.services.classification import classify_request
 from app.services.responses import ANSWERS
 from app.services.answer_generation import generate_lookup_answer
 from app.tools.pdf_search import PdfLookupError, consult_pdf
@@ -40,7 +40,7 @@ class QuestionService:
         self._generate = generate_response
         # Cache interpretation only; rows, prices, and answers stay fresh.
         self._classify = lru_cache(maxsize=128)(
-            lambda question: classify_question(question, self._generate)
+            lambda question: classify_request(question, self._generate)
         )
         self._plan = lru_cache(maxsize=128)(
             lambda question: plan_database_query(question, self._generate)
@@ -68,7 +68,8 @@ class QuestionService:
             try:
                 with self._inference_lock:
                     hits = self._classify.cache_info().hits
-                    question_type = self._classify(question)
+                    intent = self._classify(question)
+                    question_type = intent.question_type
                     LOGGER.info(
                         "Question route | type=%s | cache_hit=%s",
                         question_type.value,
@@ -76,13 +77,25 @@ class QuestionService:
                     )
                     if question_type in LOOKUP_TYPES:
                         evidence = {"question": question}
+                        mixed = question_type == QuestionType.DATABASE_AND_PDF
+                        if mixed:
+                            evidence.update(
+                                database_question=intent.database_question,
+                                policy_question=intent.policy_question,
+                            )
                         if question_type in DATABASE_TYPES:
                             evidence["database_tool_result"] = (
-                                self._database_lookup(question)
+                                self._database_lookup(
+                                    (intent.database_question or question)
+                                    if mixed else question
+                                )
                             )
                         if question_type in PDF_TYPES:
                             evidence["pdf_tool_result"] = (
-                                self._pdf_lookup(question)
+                                self._pdf_lookup(
+                                    (intent.policy_question or question)
+                                    if mixed else question
+                                )
                             )
                         prompt = (
                             MIXED_ANSWER_PROMPT

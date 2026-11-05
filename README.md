@@ -236,12 +236,56 @@ The latter indicates the required source, not a pending implementation.
 | `database_and_pdf` | Both tools, then a response addressing both parts |
 | `greeting` | Fixed store greeting |
 | `out_of_scope` | Fixed refusal for unrelated subjects |
+| `accessory` | Fixed, polite redirect: the store sells instruments, not standalone accessories |
 
 Missing/blank questions return 422. Unavailable database/PDF/model services
 return 503; model timeouts return 504; invalid model plans and other inference
 failures return 502. Startup errors prevent serving entirely. Inference and
 lookups are serialized to respect the target machine's memory budget; use one
 Uvicorn worker. Answers are independent; conversation history is not stored.
+
+## Interaction examples
+
+The following screenshots show actual requests made through Swagger UI at
+`http://127.0.0.1:8000/docs`. They cover database lookups and policy retrieval;
+the original captures are included without modifying their responses.
+Prices and availability reflect the data at the time of each request.
+
+### 1. Return policy
+
+Question: “Me arrependi da minha compra, posso devolver meu pedido?”
+
+The assistant retrieves the policy and cites page 4. The seven-calendar-day
+withdrawal rule in section 4.1 applies to online purchases; eligibility for a
+specific order still requires checking the purchase circumstances.
+
+![Swagger request and response explaining the store return policy](docs/images/return-policy.png)
+
+### 2. Available guitars costing up to BRL 1,000
+
+Question: “Quais opções de violões disponíveis custando até R$1000?”
+
+The assistant queries product data, returns names and prices, and identifies
+the list as a partial selection of matching results.
+
+![Swagger request and partial list of available guitars within the price limit](docs/images/available-guitars.png)
+
+### 3. Store address
+
+Question: “Qual o endereço da loja?”
+
+The assistant retrieves the address from the policy document and includes
+the supporting page references.
+
+![Swagger request and response containing the store address and PDF references](docs/images/store-address.png)
+
+### 4. Specific product price
+
+Question: “Quanto custa o Takamine GD20?”
+
+The assistant queries the catalog and returns the product price.
+
+![Swagger request and price response for the Takamine GD20](docs/images/takamine-price.png)
 
 ## Tools and answer guarantees
 
@@ -291,6 +335,24 @@ name operators default to partial matching and identifier filters must be
 positive integers. For example, an answer
 can naturally say that a product originally priced at BRL 359.00 is now
 BRL 323.10 with 10% off.
+
+Product plans explicitly distinguish a model name, category, availability and
+maximum current price. The tool compiles those constraints into fixed SQL
+semantics. Explicit order identifiers must be preserved, and invented numeric
+filters such as an unrequested `price_brl=0` are rejected before execution.
+Tracking codes are checked against the returned order, and delivered orders
+must be described as delivered. Monetary validation supports aggregate values
+and query price limits as well as individual product prices.
+
+PDF answers use structured model output with text and `source_pages`.
+Classification also extracts separate data/policy questions in the same call.
+Mixed requests generate the two parts independently, then join their text:
+this costs a second generation call but prevents policy evidence from
+overwhelming price facts in the small local model. Python validates the
+selected pages and renders missing references. It also discloses truncated
+lists. These are evidence/pagination metadata, not generated prices or fixed
+business answers. Source-page selection still does not prove every semantic
+claim, and the live scenarios must be reviewed for factual correctness.
 
 SQL facts are deterministic for the same plan and database snapshot.
 Classification, plan selection, and final prose remain model-based. Adding
@@ -438,6 +500,28 @@ source are not constrained to be unique. `order_items` uses the composite key
 `(order_id, product_id)`. Foreign keys connect products/categories,
 orders/customers, items/orders/products, and promotions/products. Non-importer
 connections must enable SQLite foreign keys when performing writes.
+
+## Use of coding assistance tools
+
+I used ChatGPT through the editor extension to assist with implementation,
+debugging, refactoring, test creation, and documentation. I retained
+responsibility for technical and architectural decisions, including the
+choice of components, tool boundaries, data consistency requirements, and
+tradeoffs between response quality, latency, and local hardware limits.
+These decisions were not delegated to the coding assistant.
+
+The development instructions also required execution and latency tests:
+changes had to be checked through automated tests and, where relevant,
+actual local execution. Performance checks distinguish deterministic SQL
+and API tests with mocked inference from tests using the real local model.
+`make test` runs the default suite, `make test-live` enables actual-model
+timing tests, and `make benchmark` measures the execution stages. Passing
+mocked tests alone does not demonstrate model answer quality or real
+inference speed; local measurements do not establish production capacity.
+
+AI assistance supported the coding work; it did not replace critical review,
+verification against the supplied data and policies, or responsibility for
+the resulting implementation and its documented limitations.
 
 ## Sources
 

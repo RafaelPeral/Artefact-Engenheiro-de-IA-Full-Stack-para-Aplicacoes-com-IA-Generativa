@@ -84,9 +84,17 @@ async def test_first_request_queries_imported_database(runtime, monkeypatch,
         json.dumps({"entity": "products", "filters": [
             {"field": "product_id", "value": 81},
         ]}),
-        ("Yamaha C40: BRL 599.90. Return policy (page 2)."
-         if kind == "database_and_pdf" else "Yamaha C40: BRL 599.90."),
+        "Yamaha C40: BRL 599.90.",
     ]
+    if kind == "database_and_pdf":
+        runtime.generate.side_effect = [
+            json.dumps({"question_type": kind}),
+            json.dumps({"entity": "products", "filters": [
+                {"field": "product_id", "value": 81},
+            ]}),
+            "Yamaha C40: BRL 599.90.",
+            json.dumps({"answer": "Return policy (page 2).", "source_pages": [2]}),
+        ]
     async with api.app.router.lifespan_context(api.app):
         async with AsyncClient(transport=ASGITransport(app=api.app),
                                base_url="http://testserver") as connection:
@@ -98,13 +106,16 @@ async def test_first_request_queries_imported_database(runtime, monkeypatch,
     assert body["question_type"] == kind
     assert body["requires_lookup"] is True
     if kind == "database_and_pdf":
-        assert body["answer"] == "Yamaha C40: BRL 599.90. Return policy (page 2)."
+        assert body["answer"] == (
+            "Yamaha C40: BRL 599.90.\n\nReturn policy (page 2)."
+        )
         evidence = json.loads(runtime.generate.call_args.args[0])
-        row = evidence["database_tool_result"]["rows"][0]
+        row = json.loads(runtime.generate.call_args_list[-2].args[0])[
+            "database_tool_result"]["rows"][0]
         assert row["price_brl"] == 599.9
         assert evidence["pdf_tool_result"] == pdf.return_value
         pdf.assert_called_once()
-        assert runtime.generate.call_count == 3
+        assert runtime.generate.call_count == 4
     else:
         assert "Yamaha C40" in body["answer"]
         assert "599.90" in body["answer"]
@@ -144,9 +155,10 @@ async def test_catalog_question_passes_complete_category_evidence(runtime,
                 "/questions", params={"question": "What products do you sell?"}
             )
     assert response.status_code == 200
-    assert response.json()["answer"] == (
+    assert response.json()["answer"].startswith(
         "The catalog spans six product categories."
     )
+    assert ("seleção parcial" in response.json()["answer"]) == (operation == "list")
     payload = json.loads(runtime.generate.call_args.args[0])
     overview = payload["database_tool_result"]["catalog_overview"]
     assert overview["total_products"] == 65
