@@ -224,3 +224,5 @@ __marimo__/
 
 # Generated local performance measurements.
 reports/performance/
+
+.vscode
