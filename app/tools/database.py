@@ -3,10 +3,11 @@
 import json
 import math
 import os
+import re
 import sqlite3
 import unicodedata
 from contextlib import closing
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from time import monotonic
 from typing import Literal
@@ -51,6 +52,12 @@ class QueryPlan(BaseModel):
     sort_by: str | None = None
     descending: bool = False
     limit: int = Field(default=5, ge=1, le=10)
+    product_category: str | None = None
+    product_name: str | None = None
+    available_only: bool = False
+    maximum_price_brl: float | None = Field(
+        default=None, ge=0, allow_inf_nan=False,
+    )
 
 
 # Every identifier and join below is application-owned, never model-authored.
@@ -156,10 +163,52 @@ def _discounted_price(price, discount):
     return float(amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 
+def _query_filters(plan):
+    """Compile explicit product constraints to their fixed SQL semantics."""
+    constraints = []
+    if plan.product_name:
+        constraints.append(QueryFilter(
+            field="name", operator="contains", value=plan.product_name,
+        ))
+    if plan.product_category:
+        constraints.append(QueryFilter(
+            field="category", operator="contains", value=plan.product_category,
+        ))
+    if plan.available_only:
+        constraints.extend([
+            QueryFilter(field="stock_quantity", operator="gte", value=1),
+            QueryFilter(field="status", operator="eq", value="active"),
+        ])
+    if plan.maximum_price_brl is not None:
+        constraints.append(QueryFilter(
+            field="effective_price_brl", operator="lte",
+            value=plan.maximum_price_brl,
+        ))
+    if constraints and plan.entity != "products":
+        raise DatabasePlanError("Product constraints require products")
+    fields = {condition.field for condition in constraints}
+    remaining = []
+    for condition in plan.filters:
+        if (plan.entity == "products"
+                and "product_name" in plan.model_fields_set
+                and condition.field == "name"):
+            continue
+        if (plan.maximum_price_brl is not None and condition.field in {
+            "price_brl", "effective_price_brl",
+        } and condition.operator in {"auto", "eq", "lte"}):
+            continue
+        if (condition.field in fields
+                and not (condition.field == "effective_price_brl"
+                         and condition.operator == "gte")):
+            continue
+        remaining.append(condition)
+    return constraints + remaining
+
+
 def _build_query(plan):
     source, columns = TABLES[plan.entity]
     predicates, parameters = [], []
-    for condition in plan.filters:
+    for condition in _query_filters(plan):
         if condition.field not in columns:
             raise DatabasePlanError("Unsupported database filter")
         column = columns[condition.field]
@@ -167,6 +216,7 @@ def _build_query(plan):
         numeric = condition.field in NUMERIC_FIELDS
         if numeric:
             if (not isinstance(value, (int, float))
+                    or (isinstance(value, bool) and condition.field != "is_active")
                     or abs(value) > 2**63 - 1 or not math.isfinite(value)):
                 raise DatabasePlanError(
                     "Numeric filters require finite, bounded numbers"
@@ -230,7 +280,7 @@ def _build_query(plan):
             selected = {key: columns[key] for key in (
                 "product_id", "name", "price_brl", "effective_price_brl",
                 "discount_percent", "active_promotion_id", "pricing_status",
-                "stock_quantity",
+                "stock_quantity", "status",
             )}
         else:
             selected = columns
@@ -352,7 +402,7 @@ def execute_database_plan(plan, path=None):
     result = {
         "source": "sqlite", "supported": True, "entity": plan.entity,
         "operation": plan.operation, "metric": plan.metric,
-        "filters": [condition.model_dump() for condition in plan.filters],
+        "filters": [condition.model_dump() for condition in _query_filters(plan)],
         "found": bool(rows), "rows": rows, "truncated": truncated,
     }
     if overview is not None:
@@ -374,14 +424,63 @@ def plan_database_query(question, generate_response):
     with trace_step("database.plan"):
         message = question.strip()
         for attempt in range(2):
+            schema = QueryPlan.model_json_schema()
+            # Force an explicit interpretation instead of silently omitting
+            # requested stock/category/budget constraints in small models.
+            schema["required"] = [
+                "entity", "operation", "product_name", "product_category",
+                "available_only",
+                "maximum_price_brl",
+            ]
             output = generate_response(
                 message, load_prompt("database_plan.md"),
-                response_format=QueryPlan.model_json_schema(),
+                response_format=schema,
             )
             try:
                 plan = QueryPlan.model_validate(json.loads(output))
                 if plan.entity != "unsupported":
                     _build_query(plan)
+                    numbers = set()
+                    for literal in re.findall(r"\d+(?:[.,]\d+)*", question):
+                        try:
+                            numbers.add(Decimal(literal.replace(",", ".")))
+                        except InvalidOperation:
+                            pass
+                        try:
+                            numbers.add(Decimal(
+                                literal.replace(".", "").replace(",", ".")
+                            ))
+                        except InvalidOperation:
+                            pass
+                    for condition in plan.filters:
+                        if (condition.field in {
+                            "price_brl", "effective_price_brl", "total_brl",
+                            "discount_percent",
+                        } and Decimal(str(condition.value)) not in numbers):
+                            raise DatabasePlanError(
+                                "Remove invented numeric filters: "
+                                f"{condition.field}={condition.value} was not "
+                                "requested. A price question is not price=0."
+                            )
+                    requested_orders = re.findall(
+                        r"\b(?:pedido|order)\s*#?\s*(\d+)\b",
+                        question, re.IGNORECASE,
+                    )
+                    if requested_orders and plan.entity in {
+                        "orders", "order_items",
+                    }:
+                        requested_ids = {int(value) for value in requested_orders}
+                        selected_ids = {
+                            condition.value for condition in plan.filters
+                            if condition.field == "order_id"
+                            and condition.operator in {"auto", "eq"}
+                        }
+                        if selected_ids != requested_ids:
+                            raise DatabasePlanError(
+                                "Retrieve the explicit order_id "
+                                f"{sorted(requested_ids)}, not orders filtered "
+                                "by an assumed status. Never use another order."
+                            )
                 return plan
             except (ValueError, TypeError, DatabasePlanError) as error:
                 if attempt:

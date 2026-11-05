@@ -46,6 +46,39 @@ def test_partial_name_defaults_to_containment(database):
     assert result["rows"][0]["effective_price_brl"] == 599.9
 
 
+def test_explicit_product_constraints_preserve_stock_category_and_budget(database):
+    result = execute_database_plan({
+        "entity": "products", "product_category": "Violões",
+        "product_name": None, "available_only": True,
+        "maximum_price_brl": 1000,
+        "filters": [{"field": "name", "value": "violão"},
+                    {"field": "price_brl", "value": 1000}],
+    }, database)
+    assert result["found"]
+    assert result["catalog_overview"]["total_products"] == 12
+    assert result["truncated"]
+    assert all(row["category_id"] == 5 and row["stock_quantity"] > 0
+               and row["status"] == "active"
+               and row["effective_price_brl"] <= 1000
+               for row in result["rows"])
+    assert {item["field"] for item in result["filters"]} == {
+        "category", "status", "stock_quantity", "effective_price_brl",
+    }
+
+
+def test_product_budget_preserves_explicit_lower_bound(database):
+    result = execute_database_plan({
+        "entity": "products", "product_category": "Violões",
+        "product_name": None, "available_only": True,
+        "maximum_price_brl": 1000,
+        "filters": [{"field": "effective_price_brl", "operator": "gte",
+                     "value": 800}],
+    }, database)
+    assert result["found"]
+    assert all(800 <= row["effective_price_brl"] <= 1000
+               for row in result["rows"])
+
+
 def test_zero_promotion_id_is_replanned_before_query(database):
     invalid = {"entity": "products", "operation": "price", "filters": [
         {"field": "name", "value": "Yamaha C40"},
@@ -392,6 +425,46 @@ def test_planner_uses_schema_and_executes_validated_output(database):
     assert evidence["rows"][0]["status"] == "delivered"
     schema = model.call_args.kwargs["response_format"]
     assert schema["additionalProperties"] is False
+
+
+def test_order_status_filter_cannot_replace_explicit_order_id(database):
+    wrong = {"entity": "orders", "filters": [
+        {"field": "status", "value": "shipped"},
+    ]}
+    correct = {"entity": "orders", "filters": [
+        {"field": "order_id", "value": 3},
+    ]}
+    model = Mock(side_effect=[json.dumps(wrong), json.dumps(correct)])
+    result = consult_database("Meu pedido 3 já foi enviado?", model, database)
+    assert result["rows"][0]["order_id"] == 3
+    assert result["rows"][0]["status"] == "delivered"
+    assert result["rows"][0]["tracking_code"] == "BRDZ4561230BR"
+    assert "explicit order_id" in model.call_args.args[0]
+    assert model.call_count == 2
+
+
+def test_wrong_order_id_is_rejected_before_querying_customer_data(database):
+    model = Mock(return_value=json.dumps({
+        "entity": "orders", "filters": [{"field": "order_id", "value": 1}],
+    }))
+    with pytest.raises(DatabasePlanError):
+        consult_database("Order 3 status?", model, database)
+    assert model.call_count == 2
+
+
+def test_invented_zero_price_filter_is_replanned(database):
+    base = {"entity": "products", "operation": "price",
+            "product_name": "Kalani KAL-700T"}
+    model = Mock(side_effect=[
+        json.dumps(dict(base, filters=[{"field": "price_brl", "value": 0}])),
+        json.dumps(base),
+    ])
+    result = consult_database(
+        "Quanto custa a Kalani KAL-700T e posso devolver?", model, database,
+    )
+    assert result["rows"][0]["product_id"] == 127
+    assert result["rows"][0]["effective_price_brl"] == 323.1
+    assert "invented numeric filters" in model.call_args.args[0]
 
 
 @pytest.mark.parametrize(
