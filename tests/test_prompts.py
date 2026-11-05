@@ -5,7 +5,9 @@ import pytest
 from app.prompts import load_prompt
 
 
-@pytest.mark.parametrize("name", ["assistant.md", "classification.md", "pdf_answer.md"])
+@pytest.mark.parametrize("name", ["assistant.md", "classification.md", "pdf_answer.md",
+                                  "database_plan.md", "lookup_answer.md",
+                                  "mixed_answer.md"])
 def test_prompts_are_loaded_from_package_not_working_directory(name, tmp_path, monkeypatch):
     load_prompt.cache_clear()
     monkeypatch.chdir(tmp_path)

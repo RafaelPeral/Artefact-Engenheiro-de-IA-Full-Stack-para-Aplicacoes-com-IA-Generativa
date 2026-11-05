@@ -9,6 +9,10 @@ class PolicyUnavailable(QuestionServiceError):
     pass
 
 
+class DatabaseUnavailable(QuestionServiceError):
+    pass
+
+
 class InferenceUnavailable(QuestionServiceError):
     pass
 

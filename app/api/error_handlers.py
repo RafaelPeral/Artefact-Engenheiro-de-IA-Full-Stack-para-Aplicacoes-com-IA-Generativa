@@ -5,12 +5,13 @@ from fastapi.responses import JSONResponse
 
 from app.domain.errors import (
     InferenceFailure, InferenceTimeout, InferenceUnavailable,
-    PolicyUnavailable, QuestionServiceError,
+    DatabaseUnavailable, PolicyUnavailable, QuestionServiceError,
 )
 
 
 STATUS_CODES = {
     PolicyUnavailable: 503,
+    DatabaseUnavailable: 503,
     InferenceUnavailable: 503,
     InferenceTimeout: 504,
     InferenceFailure: 502,
