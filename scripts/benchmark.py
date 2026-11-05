@@ -56,8 +56,12 @@ class Recorder:
             if method == "chat":
                 schema = kwargs.get("format")
                 if schema:
-                    kind = ("classification" if "question_type" in
-                            schema.get("properties", {}) else "database_plan")
+                    properties = schema.get("properties", {})
+                    kind = "answer"
+                    if "question_type" in properties:
+                        kind = "classification"
+                    elif "entity" in properties:
+                        kind = "database_plan"
                 else:
                     kind = "answer"
             with self.measure(f"ollama.{kind}", model=kwargs.get("model"),

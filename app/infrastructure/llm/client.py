@@ -105,7 +105,12 @@ def initialize_llm(
                     raise ValueError("message must be a non-empty string")
                 if system_prompt is None:
                     system_prompt = load_prompt("assistant.md")
-                operation = "llm.classify" if response_format is not None else "llm.generate"
+                properties = (response_format or {}).get("properties", {})
+                operation = "llm.generate"
+                if "question_type" in properties:
+                    operation = "llm.classify"
+                elif "entity" in properties:
+                    operation = "llm.plan"
                 with trace_step(operation):
                     response = client.chat(
                         model=model,
