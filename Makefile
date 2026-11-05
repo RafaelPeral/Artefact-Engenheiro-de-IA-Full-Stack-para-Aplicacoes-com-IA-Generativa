@@ -1,43 +1,45 @@
-SHELL := powershell.exe
-.SHELLFLAGS := -NoProfile -Command
+# Python owns task execution; Make recipes do not depend on PowerShell/Bash.
+.DEFAULT_GOAL := help
+ifeq ($(OS),Windows_NT)
+PYTHON ?= python
+else
+PYTHON ?= python3
+endif
 
-.PHONY: help install ollama pip model embeddings run test benchmark
+PROJECT = "$(PYTHON)" -m scripts.project
+LIVE ?= 0
+.PHONY: help install run test test-live benchmark pip ollama model embeddings models
 
 help:
-	@Write-Host "$$([char]27)[1;36mAvailable commands:$$([char]27)[0m"
-	@Write-Host "$$([char]27)[1;32mmake install$$([char]27)[0m"
-	@Write-Host "$$([char]27)[1;33mmake run$$([char]27)[0m"
-	@Write-Host "$$([char]27)[1;35mmake ollama$$([char]27)[0m"
-	@Write-Host "$$([char]27)[1;36mmake model$$([char]27)[0m"
-	@Write-Host "$$([char]27)[1;36mmake embeddings$$([char]27)[0m"
-	@Write-Host "$$([char]27)[1;36mmake test$$([char]27)[0m"
-	@Write-Host "$$([char]27)[1;36mmake benchmark$$([char]27)[0m"
-
-ollama:
-	@& ./scripts/setup_ollama.ps1
-
-pip:
-	python -m pip install --upgrade pip 
-	python -m pip install -r requirements.txt
+	@$(PROJECT) help
 
 install:
-	@Write-Host "$$([char]27)[1;35mmake pip$$([char]27)[0m"
-	$(MAKE) pip
-	@Write-Host "$$([char]27)[1;35mmake ollama$$([char]27)[0m"
-	$(MAKE) ollama
-
-model:
-	python -c "from app.core.tracing import configure_logging; from app.infrastructure.llm.preparation import prepare_model; configure_logging(); prepare_model()"
-
-embeddings:
-	python -c "from app.core.tracing import configure_logging; from app.infrastructure.llm.preparation import prepare_model; configure_logging(); prepare_model('embeddinggemma')"
+	@$(PROJECT) install
 
 run:
-	python -m uvicorn app.app:app --host 127.0.0.1 --port 8000
+	@$(PROJECT) run
 
 test:
-	python -m pytest
+	@$(PROJECT) test $(if $(filter 1,$(LIVE)),--live,)
+
+test-live:
+	@$(PROJECT) test --live
 
 benchmark:
-	python -m scripts.benchmark --output reports/performance/latest.json
-	
+	@$(PROJECT) benchmark
+
+# Optional repair tasks; the normal setup needs only make install.
+pip:
+	@$(PROJECT) pip
+
+ollama:
+	@$(PROJECT) ollama
+
+models:
+	@$(PROJECT) models
+
+model:
+	@$(PROJECT) model
+
+embeddings:
+	@$(PROJECT) embeddings
